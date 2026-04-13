@@ -37,21 +37,39 @@ Local, full-stack voice generation and cinematic dubbing. **No API keys. No clou
 
 ## 🚀 Getting Started
 
-Quickly get OmniVoice Studio running locally on your hardware.
+The easiest way to run OmniVoice Studio locally or on a cloud VM is via Docker. Our environment utilizes an optimized `pytorch/pytorch` configuration which seamlessly enables zero-config GPU passthrough if your host supports it.
 
-**Prerequisites:** Ensure `ffmpeg` is installed on your system.
-Install standard web tooling: [Bun](https://bun.sh/) and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+### Option 1: One-Click Docker (Recommended)
 
 ```bash
 git clone https://github.com/debpalash/OmniVoice-Studio.git
 cd OmniVoice-Studio
 
-# Backend
-uv sync
+docker compose up --build -d
+```
+That's it! Open [http://localhost:8000](http://localhost:8000) in your browser.
 
-# Frontend
+> [!TIP]
+> **Windows/WSL Users:** Make sure your NVIDIA drivers are up to date. Docker Desktop automatically passes GPU capabilities to this container!
+> **Cloud VMs (AWS, RunPod):** The image inherently supports CUDA 12.1. As long as `nvidia-container-toolkit` is installed on your host, `--gpus all` binds natively.
+
+### Option 2: Local Development Setup
+
+Quickly get OmniVoice Studio running natively on your hardware if you want to develop or modify code.
+**Prerequisites:** Ensure `ffmpeg` is installed on your system.
+Install standard modern web tooling: [Bun](https://bun.sh/) and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+```bash
+git clone https://github.com/debpalash/OmniVoice-Studio.git
+cd OmniVoice-Studio
+
+# Boot the Backend
+uv sync
+uv run uvicorn backend.main:app
+
+# Boot the Frontend (in a separate terminal)
 bun install
-bun dev
+bun run dev
 ```
 
 OmniVoice Studio launches exactly two micro-services:
