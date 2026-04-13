@@ -127,6 +127,20 @@ The studio is highly functional today, but we are aggressively expanding. Watch 
 
 <br/>
 
+## ⭐ Star History
+
+<div align="center">
+  <a href="https://star-history.com/#debpalash/OmniVoice-Studio&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=debpalash/OmniVoice-Studio&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=debpalash/OmniVoice-Studio&type=Date" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=debpalash/OmniVoice-Studio&type=Date&theme=dark" width="100%" />
+    </picture>
+  </a>
+</div>
+
+<br/>
+
 <div align="center">
   Contributions and conceptual ideas are greatly appreciated — open an issue or submit a PR.
 </div>
