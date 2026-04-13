@@ -1044,10 +1044,12 @@ async def dub_list_tracks(job_id: str):
 
 @app.get("/dub/download/{job_id}")
 @app.get("/dub/download/{job_id}/{filename}")
-async def dub_download(job_id: str, preserve_bg: bool = Query(True, description="Mix background noise into dubbed tracks"), make_default: bool = Query(True)):
-    """Mux ALL dubbed language tracks into the video.
+async def dub_download(job_id: str, preserve_bg: bool = Query(True, description="Mix background noise into dubbed tracks"), default_track: str = Query("original"), include_tracks: str = Query("", description="Comma-separated list of tracks to include (e.g. 'original,de,es'). Empty = include all.")):
+    """Mux selected dubbed language tracks into the video.
     If preserve_bg=true, mixes isolated background noise seamlessly into each dubbed string.
-    If make_default=true, sets the FIRST dubbed language track as the default audio track."""
+    If default_track is 'original', sets the original audio as default track.
+    If default_track is a language code, sets that dubbed track as default.
+    If include_tracks is provided, only include those specific tracks."""
     job = _get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1055,6 +1057,19 @@ async def dub_download(job_id: str, preserve_bg: bool = Query(True, description=
     tracks = job.get("dubbed_tracks", {})
     if not tracks:
         raise HTTPException(status_code=400, detail="No dubbed tracks generated yet")
+
+    # Parse include_tracks filter
+    include_set = set(t.strip() for t in include_tracks.split(",") if t.strip()) if include_tracks else None
+    include_original = include_set is None or "original" in include_set
+
+    # Filter dubbed tracks if include_set is specified
+    if include_set:
+        filtered_tracks = {k: v for k, v in tracks.items() if k in include_set}
+    else:
+        filtered_tracks = dict(tracks)
+    
+    if not filtered_tracks and not include_original:
+        raise HTTPException(status_code=400, detail="No tracks selected for export")
 
     video_path = job["video_path"]
     output_path = os.path.join(DUB_DIR, job_id, "dubbed_video_final.mp4")
@@ -1065,19 +1080,23 @@ async def dub_download(job_id: str, preserve_bg: bool = Query(True, description=
     
     bg_audio = job.get("no_vocals_path") if preserve_bg else None
     bg_idx = None
-    if bg_audio and os.path.exists(bg_audio):
+    if bg_audio and os.path.exists(bg_audio) and filtered_tracks:
         cmd += ["-i", bg_audio]
         bg_idx = input_idx
         input_idx += 1
 
     tracks_to_process = []
-    for lang_code, track_info in tracks.items():
+    for lang_code, track_info in filtered_tracks.items():
         cmd += ["-i", track_info["path"]]
         tracks_to_process.append({"lang_code": lang_code, "idx": input_idx, "info": track_info})
         input_idx += 1
 
-    # Map original video and original audio
-    cmd += ["-map", "0:v:0", "-map", "0:a:0"]
+    # Map original video
+    cmd += ["-map", "0:v:0"]
+    
+    # Only include original audio if selected
+    if include_original:
+        cmd += ["-map", "0:a:0"]
 
     if bg_idx is not None:
         filters = []
@@ -1093,26 +1112,38 @@ async def dub_download(job_id: str, preserve_bg: bool = Query(True, description=
         for t in tracks_to_process:
             cmd += ["-map", f"{t['idx']}:a:0"]
 
-    if bg_idx is not None:
-        cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k"]
-    else:
-        cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k"]
-        
-    cmd += ["-metadata:s:a:0", "language=und", "-metadata:s:a:0", "title=Original"]
+    cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k"]
 
-    for idx, t in enumerate(tracks_to_process):
-        stream_idx = idx + 1
+    # Build audio stream metadata with correct indices
+    audio_stream_idx = 0
+    
+    if include_original:
+        cmd += [f"-metadata:s:a:{audio_stream_idx}", "language=und", f"-metadata:s:a:{audio_stream_idx}", "title=Original"]
+        audio_stream_idx += 1
+
+    for t in tracks_to_process:
         cmd += [
-            f"-metadata:s:a:{stream_idx}", f"language={t['lang_code']}",
-            f"-metadata:s:a:{stream_idx}", f"title={t['info']['language']}"
+            f"-metadata:s:a:{audio_stream_idx}", f"language={t['lang_code']}",
+            f"-metadata:s:a:{audio_stream_idx}", f"title={t['info']['language']}"
         ]
+        t["stream_idx"] = audio_stream_idx
+        audio_stream_idx += 1
 
-    # Explicit default audio tracks handling
-    if make_default and tracks_to_process:
-        cmd += ["-disposition:a:0", "0"] # Remove default from original
-        cmd += ["-disposition:a:1", "default"] # Give default to first dub track
-    else:
+    # Set all dispositions to 0 first, then set the default
+    total_audio = (1 if include_original else 0) + len(tracks_to_process)
+    for i in range(total_audio):
+        cmd += [f"-disposition:a:{i}", "0"]
+
+    if default_track == "original" and include_original:
         cmd += ["-disposition:a:0", "default"]
+    else:
+        # Find the stream index for the default track
+        target_idx = 0
+        for t in tracks_to_process:
+            if t['lang_code'] == default_track:
+                target_idx = t["stream_idx"]
+                break
+        cmd += [f"-disposition:a:{target_idx}", "default"]
 
     cmd += ["-shortest", output_path, "-y"]
 

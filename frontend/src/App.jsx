@@ -8,7 +8,8 @@ import {
   Download as DownloadIcon, History, Command, Globe, Volume2, UploadCloud, 
   Settings2, ChevronDown, ChevronUp, Play, Search, Film, Trash2,
   FileText, Loader, Check, AlertCircle, Plus, User, Save, Languages, Headphones,
-  FolderOpen, FolderPlus, Pencil, Clock, Lock, Unlock, Mic, MicOff, Square
+  FolderOpen, FolderPlus, Pencil, Clock, Lock, Unlock, Mic, MicOff, Square,
+  CheckCircle, Circle, ChevronRight, Target, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 
 const TAGS = [
@@ -17,6 +18,28 @@ const TAGS = [
   '[surprise-ah]', '[surprise-oh]', '[surprise-wa]', '[surprise-yo]',
   '[dissatisfaction-hnn]'
 ];
+
+let _pingCtx = null;
+const playPing = () => {
+  try {
+    if (!_pingCtx) _pingCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _pingCtx;
+    if (ctx.state === 'suspended') ctx.resume();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(600, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(900, ctx.currentTime + 0.08);
+    osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.15);
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 0.03);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.25);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.25);
+  } catch (e) {}
+};
 
 const CATEGORIES = {
   Gender: ["Auto", "male", "female"],
@@ -116,6 +139,8 @@ function App() {
   const [showSaveProfile, setShowSaveProfile] = useState(false);
   const [profileName, setProfileName] = useState('');
   const [showAllProjects, setShowAllProjects] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(null);
+  const [segmentPreviewLoading, setSegmentPreviewLoading] = useState(null);
 
   // ═══ MIC RECORDING ═══
   const [isRecording, setIsRecording] = useState(false);
@@ -146,7 +171,8 @@ function App() {
   const [previewAudios, setPreviewAudios] = useState({});
   const [dubHistory, setDubHistory] = useState([]);
   const [preserveBg, setPreserveBg] = useState(true);
-  const [makeDefaultTrack, setMakeDefaultTrack] = useState(true);
+  const [defaultTrack, setDefaultTrack] = useState('original');
+  const [exportTracks, setExportTracks] = useState({original: true}); // {original: true, es: true, de: false, ...}
   const [transcribeStart, setTranscribeStart] = useState(null);
   const [transcribeElapsed, setTranscribeElapsed] = useState(0);
 
@@ -155,6 +181,8 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [activeProjectName, setActiveProjectName] = useState('');
   const [sidebarTab, setSidebarTab] = useState('projects'); // 'projects' | 'history'
+  const [isSidebarProjectsCollapsed, setIsSidebarProjectsCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // ── LOAD DATA FROM SERVER ──
   const [sysStats, setSysStats] = useState(null);
@@ -212,6 +240,8 @@ function App() {
       if (saved.mode) setMode(saved.mode);
       if (saved.vdStates) setVdStates(saved.vdStates);
       if (saved.language) setLanguage(saved.language);
+      if (saved.isSidebarCollapsed !== undefined) setIsSidebarCollapsed(saved.isSidebarCollapsed);
+      if (saved.sidebarTab) setSidebarTab(saved.sidebarTab);
       // Dub state
       if (saved.dubJobId) setDubJobId(saved.dubJobId);
       if (saved.dubFilename) setDubFilename(saved.dubFilename);
@@ -228,10 +258,35 @@ function App() {
   useEffect(() => {
     localStorage.setItem('omni_ui', JSON.stringify({
       uiScale, text, mode, vdStates, language,
+      isSidebarCollapsed, sidebarTab,
       dubJobId, dubFilename, dubDuration, dubSegments, 
       dubLang, dubLangCode, dubTracks, dubStep, dubTranscript
     }));
-  }, [uiScale, text, mode, vdStates, language, dubJobId, dubFilename, dubDuration, dubSegments, dubLang, dubLangCode, dubTracks, dubStep, dubTranscript]);
+  }, [uiScale, text, mode, vdStates, language, isSidebarCollapsed, sidebarTab, dubJobId, dubFilename, dubDuration, dubSegments, dubLang, dubLangCode, dubTracks, dubStep, dubTranscript]);
+
+  // ── KEYBOARD SHORTCUTS ──
+  useEffect(() => {
+    const handler = (e) => {
+      // ⌘+Enter or Ctrl+Enter → Generate
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        if (mode === 'dub') {
+          if (dubStep === 'editing' && dubSegments.length > 0) handleDubGenerate();
+        } else {
+          if (!isGenerating) handleGenerate();
+        }
+        return;
+      }
+      // ⌘+S or Ctrl+S → Save project
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        if (mode === 'dub') saveProject();
+        return;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  });
 
   // ── TTS ──
   const insertTag = (tag) => {
@@ -296,6 +351,7 @@ function App() {
       // Refresh history from server and explicitly switch to history tab automatically so user can see it
       await loadHistory();
       setSidebarTab('history');
+      playPing();
     } catch (err) {
       toast.error("Error: " + err.message);
     } finally {
@@ -323,7 +379,7 @@ function App() {
   };
 
   const handleDeleteProfile = async (id) => {
-
+    if (!confirm('Delete this voice profile?')) return;
     await fetch(`${API}/profiles/${id}`, { method: "DELETE" });
     if (selectedProfile === id) setSelectedProfile(null);
     await loadProfiles();
@@ -336,11 +392,101 @@ function App() {
     if (profile.language && profile.language !== 'Auto') setLanguage(profile.language);
   };
 
+  const handlePreviewVoice = async (proj, e) => {
+    e.stopPropagation();
+    if (previewLoading) return;
+    
+    let previewText = "This is a voice preview.";
+    let reqLang = language;
+    
+    // Auto-select text context based on current mode
+    if (mode === 'dub' && dubSegments.length > 0) {
+      // Find a segment assigned to this profile, or just the first segment with text
+      let seg = dubSegments.find(s => s.profile_id === proj.id && s.text.trim().length > 0);
+      if (!seg) seg = dubSegments.find(s => s.text.trim().length > 0);
+      if (seg) previewText = seg.text;
+      
+      reqLang = dubLang;
+    } else if (text.trim() !== '') {
+      previewText = text;
+    }
+
+    setPreviewLoading(proj.id);
+    const toastId = toast.loading(`Synthesizing preview for ${proj.name}...`);
+    
+    try {
+      const formData = new FormData();
+      formData.append("text", previewText);
+      formData.append("profile_id", proj.id);
+      if (reqLang && reqLang !== 'Auto') {
+        formData.append("language", reqLang);
+      }
+      formData.append("num_step", steps || 16);
+      
+      const res = await fetch(`${API}/generate`, { method: "POST", body: formData });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const a = new Audio(URL.createObjectURL(blob));
+      toast.success('Preview ready!', { id: toastId });
+      a.play().catch(() => toast.error('Playback failed', { id: toastId }));
+      
+      await loadHistory();
+    } catch (err) {
+      toast.error('Preview failed: ' + err.message, { id: toastId });
+    } finally {
+      setPreviewLoading(null);
+    }
+  };
+
+  const handleSegmentPreview = async (seg, e) => {
+    e.preventDefault();
+    if (segmentPreviewLoading) return;
+    setSegmentPreviewLoading(seg.id);
+    const toastId = toast.loading(`Synthesizing segment...`);
+    
+    try {
+      const formData = new FormData();
+      formData.append("text", seg.text);
+      
+      let fin_prof = seg.profile_id || '';
+      let fin_inst = seg.instruct || '';
+      
+      if (fin_prof.startsWith('preset:')) {
+        const pr = PRESETS.find(p => p.id === fin_prof.replace('preset:', ''));
+        if (pr) {
+          const parts = Object.values(pr.attrs).filter(v => v !== 'Auto');
+          if (fin_inst.trim()) parts.push(fin_inst.trim());
+          fin_inst = parts.join(', ');
+        }
+        fin_prof = '';
+      }
+      
+      if (fin_prof) formData.append("profile_id", fin_prof);
+      if (fin_inst) formData.append("instruct", fin_inst);
+      
+      if (dubLang !== 'Auto') formData.append("language", dubLang);
+      
+      formData.append("num_step", steps || 16);
+      if (seg.speed && seg.speed !== 1.0) formData.append("speed", seg.speed);
+      
+      const res = await fetch(`${API}/generate`, { method: "POST", body: formData });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const a = new Audio(URL.createObjectURL(blob));
+      toast.success('Preview ready!', { id: toastId });
+      a.play().catch(() => toast.error('Playback failed', { id: toastId }));
+    } catch (err) {
+      toast.error('Preview failed: ' + err.message, { id: toastId });
+    } finally {
+      setSegmentPreviewLoading(null);
+    }
+  };
+
   const handleSaveHistoryAsProfile = async (item) => {
     try {
       const pName = `Voice ${new Date().toLocaleTimeString('en', {hour:'2-digit', minute:'2-digit'})} — ${(item.mode||'design').toUpperCase()}`;
       
-      const response = await fetch(`${API}/audio/${item.audio_path}`);
+      const response = await fetch(`${API}/audio/${item.audio_path}?t=${Date.now()}`);
       if (!response.ok) throw new Error("Audio not found");
       const blob = await response.blob();
       const file = new File([blob], item.audio_path, { type: "audio/wav" });
@@ -566,6 +712,7 @@ function App() {
       }
       if (dubStep !== 'done') setDubStep('done');
       loadDubHistory();
+      playPing();
     } catch (err) { setDubError(err.message); setDubStep('editing'); }
   };
 
@@ -578,7 +725,14 @@ function App() {
     a.click();
     document.body.removeChild(a);
   };
-  const handleDubDownload = () => triggerDownload(`${API}/dub/download/${dubJobId}/dubbed_video.mp4?preserve_bg=${preserveBg}&make_default=${makeDefaultTrack}`, 'dubbed_video.mp4');
+  const handleDubDownload = () => {
+    // Build selected tracks from all known tracks, matching the checkbox `!== false` logic
+    const selected = [];
+    if (exportTracks['original'] !== false) selected.push('original');
+    dubTracks.forEach(t => { if (exportTracks[t] !== false) selected.push(t); });
+    const tracksParam = selected.join(',');
+    triggerDownload(`${API}/dub/download/${dubJobId}/dubbed_video.mp4?preserve_bg=${preserveBg}&default_track=${defaultTrack}&include_tracks=${encodeURIComponent(tracksParam)}`, 'dubbed_video.mp4');
+  };
   const handleDubAudioDownload = () => triggerDownload(`${API}/dub/download-audio/${dubJobId}/dubbed_audio.wav?preserve_bg=${preserveBg}`, 'dubbed_audio.wav');
   const resetDub = () => {
     setDubJobId(null); setDubStep('idle'); setDubSegments([]); setDubFilename('');
@@ -603,7 +757,7 @@ function App() {
       state: {
         dubJobId, dubFilename, dubDuration, dubSegments,
         dubLang, dubLangCode, dubInstruct, dubTracks,
-        dubStep, dubTranscript, preserveBg, makeDefaultTrack,
+        dubStep, dubTranscript, preserveBg, defaultTrack,
       },
     };
     try {
@@ -649,7 +803,7 @@ function App() {
       setDubTracks(s.dubTracks || []);
       setDubTranscript(s.dubTranscript || '');
       setPreserveBg(s.preserveBg !== undefined ? s.preserveBg : true);
-      setMakeDefaultTrack(s.makeDefaultTrack !== undefined ? s.makeDefaultTrack : true);
+      setDefaultTrack(s.defaultTrack !== undefined ? s.defaultTrack : 'original');
       setDubStep(s.dubStep === 'done' ? 'done' : (s.dubSegments?.length ? 'editing' : 'idle'));
       toast.success(`Opened: ${data.name}`);
     } catch (err) {
@@ -658,8 +812,8 @@ function App() {
   };
 
   const deleteProject = async (projectId, e) => {
-    e.stopPropagation();
-
+    if (e) e.stopPropagation();
+    if (!confirm('Delete this project? This cannot be undone.')) return;
     try {
       await fetch(`${API}/projects/${projectId}`, { method: 'DELETE' });
       if (activeProjectId === projectId) {
@@ -689,8 +843,20 @@ function App() {
     }
   };
 
-  const deleteHistory = async (id, type) => {
+  const restoreHistory = (item) => {
+    if (item.mode) setMode(item.mode);
+    if (item.text) setText(item.text);
+    if (item.language) setLanguage(item.language);
+    if (item.seed) setSeed(item.seed.toString());
+    if (item.profile_id) setSelectedProfile(item.profile_id);
+    
+    // Switch to studio tab
+    setSidebarTab('projects');
+    toast.success('Restored previous generation state');
+  };
 
+  const deleteHistory = async (id, type) => {
+    if (!confirm('Delete this history item?')) return;
     try {
       const endpoint = type === 'dub' ? `${API}/dub/history/${id}` : `${API}/history/${id}`;
       await fetch(endpoint, { method: 'DELETE' });
@@ -709,15 +875,22 @@ function App() {
   const filteredDubLangs = dubLangSearch ? ALL_LANGUAGES.filter(l => l.toLowerCase().includes(dubLangSearch.toLowerCase())) : ALL_LANGUAGES;
 
   return (
-    <div className="app-container" style={{ zoom: uiScale }}>
+    <div className="app-container" style={{ zoom: uiScale, gridTemplateColumns: isSidebarCollapsed ? '0px 1fr' : undefined }}>
       <Toaster position="top-center" toastOptions={{
         style: { background: 'rgba(40,40,40,0.9)', backdropFilter: 'blur(10px)', color: '#ebdbb2', border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.72rem', padding: '4px 8px' },
         error: { iconTheme: { primary: '#fb4934', secondary: '#fff' } },
         success: { iconTheme: { primary: '#b8bb26', secondary: '#fff' } }
       }}/>
-      <div className="header-area" style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'8px', overflowX:'auto', paddingBottom:'8px', paddingTop:'4px', gridColumn: '1 / -1'}}>
+      <div className="header-area" style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'8px', overflowX:'auto', paddingBottom:'8px', paddingTop:'4px', gridColumn: '1 / -1', gridRow: '1'}}>
         <div style={{display:'flex', alignItems:'center', gap:'16px'}}>
           <div style={{display:'flex', alignItems:'center', gap:'8px', flexShrink:0}}>
+            <button 
+               onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+               style={{display:'flex', alignItems:'center', justifyContent:'center', padding:'4px', background: isSidebarCollapsed ? 'rgba(211,134,155,0.1)' : 'rgba(255,255,255,0.05)', border:`1px solid ${isSidebarCollapsed ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.1)'}`, color: isSidebarCollapsed ? '#d3869b' : '#ebdbb2', borderRadius:4, cursor:'pointer', marginRight: 4}}
+               title="Toggle Sidebar"
+            >
+               {isSidebarCollapsed ? <PanelLeftOpen size={16}/> : <PanelLeftClose size={16}/>}
+            </button>
             <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#d3869b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
               <circle cx="12" cy="12" r="10" opacity="0.2" fill="#d3869b"/>
               <circle cx="12" cy="12" r="10" />
@@ -765,6 +938,39 @@ function App() {
             <div style={{padding:'20px 30px', borderBottom:'1px solid rgba(255,255,255,0.08)'}}>
               <h2 style={{margin:0, fontSize:'1.4rem', display:'flex', alignItems:'center', gap:'10px'}}><Globe color="#ebdbb2"/> Unified Workspace</h2>
               <p style={{margin:'4px 0 0 0', color:'#a89984', fontSize:'0.85rem'}}>Select a cloned voice, design preset, or dubbing project to load into the studio.</p>
+              
+              {/* Quick Start Guide */}
+              <div style={{marginTop:'20px', padding:'15px', background:'rgba(255,255,255,0.02)', borderRadius:'8px', border:'1px solid rgba(255,255,255,0.05)'}}>
+                <h3 style={{fontSize:'0.9rem', color:'#ebdbb2', margin:'0 0 12px 0', display:'flex', alignItems:'center', gap:6}}><Target size={14}/> OmniVoice Workflow Guide</h3>
+                <div style={{display:'flex', gap:'15px'}}>
+                  {/* Step 1 */}
+                  <div style={{flex:1, opacity: profiles.length > 0 ? 1 : 0.6}}>
+                    <div style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'6px'}}>
+                      {profiles.length > 0 ? <CheckCircle size={14} color="#b8bb26"/> : <Circle size={14} color="#a89984"/>}
+                      <span style={{fontSize:'0.8rem', fontWeight:600, color: profiles.length > 0 ? '#b8bb26' : '#ebdbb2'}}>1. Create a Voice</span>
+                    </div>
+                    <p style={{margin:0, fontSize:'0.7rem', color:'#a89984'}}>Clone a voice from audio or design a new one.</p>
+                  </div>
+                  <ChevronRight size={16} color="#504945" style={{alignSelf:'center'}}/>
+                  {/* Step 2 */}
+                  <div style={{flex:1, opacity: studioProjects.length > 0 ? 1 : 0.6}}>
+                    <div style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'6px'}}>
+                      {studioProjects.length > 0 ? <CheckCircle size={14} color="#b8bb26"/> : <Circle size={14} color="#a89984"/>}
+                      <span style={{fontSize:'0.8rem', fontWeight:600, color: studioProjects.length > 0 ? '#b8bb26' : '#ebdbb2'}}>2. Upload Video</span>
+                    </div>
+                    <p style={{margin:0, fontSize:'0.7rem', color:'#a89984'}}>Go to 'Dub', upload a video, and transcribe it.</p>
+                  </div>
+                  <ChevronRight size={16} color="#504945" style={{alignSelf:'center'}}/>
+                  {/* Step 3 */}
+                  <div style={{flex:1, opacity: dubHistory.length > 0 ? 1 : 0.6}}>
+                    <div style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'6px'}}>
+                      {dubHistory.length > 0 ? <CheckCircle size={14} color="#b8bb26"/> : <Circle size={14} color="#a89984"/>}
+                      <span style={{fontSize:'0.8rem', fontWeight:600, color: dubHistory.length > 0 ? '#b8bb26' : '#ebdbb2'}}>3. Generate Dub</span>
+                    </div>
+                    <p style={{margin:0, fontSize:'0.7rem', color:'#a89984'}}>Assign voices, translate, and download the video.</p>
+                  </div>
+                </div>
+              </div>
             </div>
             
             <div style={{flex:1, padding:'30px', display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(300px, 1fr))', gap:'30px'}}>
@@ -1229,12 +1435,9 @@ function App() {
                             )}
                           </select>
                           <div style={{display:'flex', gap:1, width:40}}>
-                            {dubStep==='done' && (
-                              <button className="segment-play" title="Preview" onClick={() => {
-                                const a = new Audio(`${API}/dub/preview/${dubJobId}/${idx}`);
-                                a.play(); setPreviewAudios({...previewAudios,[idx]:a});
-                              }}><Headphones size={9}/></button>
-                            )}
+                            <button className="segment-play" disabled={dubStep==='generating'} title="Live Preview" onClick={(e) => handleSegmentPreview(seg, e)}>
+                              {segmentPreviewLoading === seg.id ? <Loader className="spinner" size={9}/> : <Headphones size={9}/>}
+                            </button>
                             <button className="segment-del" disabled={dubStep==='generating'}
                               onClick={() => setDubSegments(dubSegments.filter(s=>s.id!==seg.id))}><Trash2 size={9}/></button>
                           </div>
@@ -1250,19 +1453,42 @@ function App() {
                     <div style={{display:'flex', alignItems:'center', gap:4, marginBottom:4, padding:'3px 6px', background:'rgba(142,192,124,0.08)', border:'1px solid rgba(142,192,124,0.2)', borderRadius:4}}>
                       <Check size={10} color="#8ec07c"/>
                       <span style={{color:'#8ec07c', fontSize:'0.65rem'}}>Done! Tracks: {dubTracks.join(', ')}</span>
-                      <div style={{marginLeft:'auto', display:'flex', alignItems:'center', gap:8, fontSize:'0.62rem', color:'#a89984'}}>
-                        <label style={{display:'flex', alignItems:'center', gap:3, cursor:'pointer'}}>
-                          <input type="checkbox" checked={preserveBg} onChange={e => setPreserveBg(e.target.checked)} style={{cursor:'pointer'}}/> Mix BG Audio
-                        </label>
-                        <label style={{display:'flex', alignItems:'center', gap:3, cursor:'pointer'}}>
-                          <input type="checkbox" checked={makeDefaultTrack} onChange={e => setMakeDefaultTrack(e.target.checked)} style={{cursor:'pointer'}}/> Default Track
-                        </label>
-                      </div>
                     </div>
                   )}
                   {dubError && (
                     <div style={{marginBottom:4, padding:'3px 6px', background:'rgba(251,73,52,0.08)', border:'1px solid rgba(251,73,52,0.2)', borderRadius:4}}>
                       <span style={{color:'#fb4934', fontSize:'0.62rem'}}>{dubError}</span>
+                    </div>
+                  )}
+                  <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:4, padding:'0 4px', fontSize:'0.65rem', color:'#a89984', flexWrap:'wrap'}}>
+                    <span style={{fontWeight:600, color:'#ebdbb2'}}>Output Options:</span>
+                    <label style={{display:'flex', alignItems:'center', gap:3, cursor:'pointer'}}>
+                      <input type="checkbox" checked={preserveBg} onChange={e => setPreserveBg(e.target.checked)} style={{cursor:'pointer'}}/> Mix BG Audio
+                    </label>
+                    <label style={{display:'flex', alignItems:'center', gap:4}}>
+                      Default Track:
+                      <select className="input-base" value={defaultTrack} onChange={e => setDefaultTrack(e.target.value)} style={{fontSize:'0.6rem', padding:'2px 4px', width:'120px'}}>
+                        <option value="original">Original</option>
+                        {dubLangCode && <option value={dubLangCode}>{dubLangCode} (Selected Dub)</option>}
+                        {dubTracks.filter(t => t !== dubLangCode).map(t => (
+                          <option key={t} value={t}>{t} (Dub)</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {dubTracks.length > 0 && (
+                    <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:8, padding:'4px 6px', fontSize:'0.62rem', color:'#a89984', background:'rgba(0,0,0,0.15)', borderRadius:4, border:'1px solid rgba(255,255,255,0.04)', flexWrap:'wrap'}}>
+                      <span style={{fontWeight:600, color:'#ebdbb2', fontSize:'0.62rem'}}>Export Tracks:</span>
+                      <label style={{display:'flex', alignItems:'center', gap:3, cursor:'pointer', color: exportTracks['original'] ? '#ebdbb2' : '#665c54'}}>
+                        <input type="checkbox" checked={exportTracks['original'] !== false} onChange={e => setExportTracks(prev => ({...prev, original: e.target.checked}))} style={{cursor:'pointer', accentColor:'#a89984'}}/>
+                        <span>Original</span>
+                      </label>
+                      {dubTracks.map(t => (
+                        <label key={t} style={{display:'flex', alignItems:'center', gap:3, cursor:'pointer', color: exportTracks[t] !== false ? '#8ec07c' : '#665c54'}}>
+                          <input type="checkbox" checked={exportTracks[t] !== false} onChange={e => setExportTracks(prev => ({...prev, [t]: e.target.checked}))} style={{cursor:'pointer', accentColor:'#8ec07c'}}/>
+                          <span style={{textTransform:'uppercase'}}>{t}</span>
+                        </label>
+                      ))}
                     </div>
                   )}
                   <div style={{display:'flex', gap:4}}>
@@ -1470,25 +1696,26 @@ function App() {
       </div>
 
       {/* ── SIDEBAR ── */}
-      <div className="glass-panel history-panel">
-        <div style={{display:'flex', borderBottom:'1px solid var(--glass-border)', background:'rgba(0,0,0,0.2)'}}>
-          <button onClick={() => setSidebarTab('projects')} style={{
-            flex:1, padding:'6px 0', fontSize:'0.75rem', fontWeight:600, cursor:'pointer', border:'none',
-            background: sidebarTab === 'projects' ? 'rgba(184,187,38,0.2)' : 'rgba(0,0,0,0.15)',
-            color: sidebarTab === 'projects' ? '#b8bb26' : '#a89984',
-            whiteSpace: 'nowrap'
-          }}><FolderOpen size={12} style={{verticalAlign:'middle', marginRight:4}}/> 
-            Projects ({mode === 'dub' ? studioProjects.length : (mode === 'clone' ? profiles.filter(p => !p.instruct).length : profiles.filter(p => !!p.instruct).length)})
-          </button>
-          <button onClick={() => setSidebarTab('history')} style={{
-            flex:1, padding:'6px 0', fontSize:'0.75rem', fontWeight:600, cursor:'pointer', border:'none',
-            background: sidebarTab === 'history' ? 'rgba(211,134,155,0.2)' : 'rgba(0,0,0,0.15)',
-            color: sidebarTab === 'history' ? '#d3869b' : '#a89984',
-            whiteSpace: 'nowrap'
-          }}><History size={12} style={{verticalAlign:'middle', marginRight:4}}/> 
-            History ({history.length + dubHistory.length})
-          </button>
-        </div>
+      {!isSidebarCollapsed && (
+        <div className="glass-panel history-panel" style={{display:'flex', flexDirection:'column'}}>
+          <div style={{display:'flex', gap:'4px', padding:'6px', borderBottom:'1px solid var(--glass-border)', background:'rgba(0,0,0,0.15)', flexShrink:0}}>
+            <button onClick={() => setSidebarTab('projects')} style={{
+              flex:1, padding:'4px 0', fontSize:'0.72rem', fontWeight:600, cursor:'pointer', border:`1px solid ${sidebarTab === 'projects' ? 'rgba(184,187,38,0.3)' : 'transparent'}`,
+              background: sidebarTab === 'projects' ? 'rgba(184,187,38,0.15)' : 'transparent',
+              color: sidebarTab === 'projects' ? '#b8bb26' : '#a89984',
+              borderRadius:4, whiteSpace: 'nowrap', transition:'all 0.2s ease'
+            }}><FolderOpen size={12} style={{verticalAlign:'middle', marginRight:4}}/> 
+              Projects ({mode === 'dub' ? studioProjects.length : (mode === 'clone' ? profiles.filter(p => !p.instruct).length : profiles.filter(p => !!p.instruct).length)})
+            </button>
+            <button onClick={() => setSidebarTab('history')} style={{
+              flex:1, padding:'4px 0', fontSize:'0.72rem', fontWeight:600, cursor:'pointer', border:`1px solid ${sidebarTab === 'history' ? 'rgba(211,134,155,0.3)' : 'transparent'}`,
+              background: sidebarTab === 'history' ? 'rgba(211,134,155,0.15)' : 'transparent',
+              color: sidebarTab === 'history' ? '#d3869b' : '#a89984',
+              borderRadius:4, whiteSpace: 'nowrap', transition:'all 0.2s ease'
+            }}><History size={12} style={{verticalAlign:'middle', marginRight:4}}/> 
+              History ({history.length + dubHistory.length})
+            </button>
+          </div>
 
         {/* ── PROJECTS TAB ── */}
         {sidebarTab === 'projects' && (
@@ -1507,89 +1734,100 @@ function App() {
               </button>
             )}
 
-            <div style={{fontSize:'0.68rem', color:'var(--text-secondary)', marginBottom:8}}>
-              {mode === 'dub' ? 'Studio Projects (Dubbing)' : (mode === 'clone' ? 'Voice Clones (Audio)' : 'Designed Voices (Synthetic)')}
+            <div 
+              style={{fontSize:'0.68rem', color:'var(--text-secondary)', marginBottom:8, display:'flex', justifyContent:'space-between', alignItems:'center', cursor:'pointer', padding:'2px 0'}}
+              onClick={() => setIsSidebarProjectsCollapsed(!isSidebarProjectsCollapsed)}
+            >
+              <span>{mode === 'dub' ? 'Studio Projects (Dubbing)' : (mode === 'clone' ? 'Voice Clones (Audio)' : 'Designed Voices (Synthetic)')}</span>
+              {isSidebarProjectsCollapsed ? <ChevronDown size={12}/> : <ChevronUp size={12}/>}
             </div>
 
-            {mode === 'dub' && (
+            {!isSidebarProjectsCollapsed && (
               <>
-                {studioProjects.length === 0 ? (
-                  <p style={{color:'var(--text-secondary)', fontSize:'0.8rem', textAlign:'center', padding:'20px 0'}}>No saved dub projects yet.<br/>Upload a video and click Save.</p>
-                ) : (
-                  studioProjects.map(proj => (
-                    <div key={proj.id} className={`history-item ${activeProjectId === proj.id ? 'project-active' : ''}`} style={{position:'relative'}}>
-                      <div className="history-header">
-                        <div className="history-badge" style={{background: activeProjectId === proj.id ? 'rgba(184,187,38,0.2)' : 'rgba(131,165,152,0.15)', color: activeProjectId === proj.id ? '#b8bb26' : '#83a598'}}>
-                          <Film size={10}/> DUB PROJECT
+                {mode === 'dub' && (
+                  <>
+                    {studioProjects.length === 0 ? (
+                      <div style={{color:'var(--text-secondary)', textAlign:'center', padding:'24px 12px'}}>
+                        <Film size={28} style={{opacity:0.3, marginBottom:8}} />
+                        <p style={{fontSize:'0.78rem', margin:0, marginBottom:4}}>No saved dub projects</p>
+                        <p style={{fontSize:'0.62rem', margin:0, opacity:0.6}}>Upload a video and click Save to keep your work.</p>
+                      </div>
+                    ) : (
+                      studioProjects.map(proj => (
+                        <div key={proj.id} className={`history-item ${activeProjectId === proj.id ? 'project-active' : ''}`} style={{position:'relative'}}>
+                          <div className="history-header">
+                            <div className="history-badge" style={{background: activeProjectId === proj.id ? 'rgba(184,187,38,0.2)' : 'rgba(131,165,152,0.15)', color: activeProjectId === proj.id ? '#b8bb26' : '#83a598'}}>
+                              <Film size={10}/> DUB PROJECT
+                            </div>
+                          </div>
+                          <div style={{fontSize:'0.78rem', color:'var(--text-primary)', marginBottom:2, fontWeight:500}}>
+                            {proj.name}
+                          </div>
+                          <div style={{display:'flex', gap:6, fontSize:'0.65rem', color:'var(--text-secondary)'}}>
+                            {proj.duration && <span>{Math.round(proj.duration)}s</span>}
+                            {proj.video_path && <span>· {proj.video_path}</span>}
+                          </div>
+                          <div style={{fontSize:'0.6rem', color:'#665c54', marginTop:2}}>
+                            <Clock size={9} style={{verticalAlign:'middle', marginRight:3}}/>
+                            {new Date(proj.updated_at * 1000).toLocaleString()}
+                          </div>
+                          <div style={{display:'flex', gap:'6px', marginTop:'8px'}}>
+                            <button onClick={() => loadProject(proj.id)} style={{flex:1, padding:'4px', background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'#ebdbb2', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', gap:'4px'}}>
+                              <FolderOpen size={10}/> Load
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); deleteProject(proj.id); }} style={{padding:'4px 8px', background:'rgba(251,73,52,0.1)', border:'1px solid rgba(251,73,52,0.2)', color:'#fb4934', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', flexShrink:0}}>
+                              <Trash2 size={10}/>
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                      <div style={{fontSize:'0.78rem', color:'var(--text-primary)', marginBottom:2, fontWeight:500}}>
-                        {proj.name}
-                      </div>
-                      <div style={{display:'flex', gap:6, fontSize:'0.65rem', color:'var(--text-secondary)'}}>
-                        {proj.duration && <span>{Math.round(proj.duration)}s</span>}
-                        {proj.video_path && <span>· {proj.video_path}</span>}
-                      </div>
-                      <div style={{fontSize:'0.6rem', color:'#665c54', marginTop:2}}>
-                        <Clock size={9} style={{verticalAlign:'middle', marginRight:3}}/>
-                        {new Date(proj.updated_at * 1000).toLocaleString()}
-                      </div>
-                      <div style={{display:'flex', gap:'6px', marginTop:'8px'}}>
-                        <button onClick={() => loadProject(proj.id)} style={{flex:1, padding:'4px', background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'#ebdbb2', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', gap:'4px'}}>
-                          <FolderOpen size={10}/> Load
-                        </button>
-                        <button onClick={(e) => { e.stopPropagation(); deleteProject(proj.id); }} style={{padding:'4px 8px', background:'rgba(251,73,52,0.1)', border:'1px solid rgba(251,73,52,0.2)', color:'#fb4934', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', flexShrink:0}}>
-                          <Trash2 size={10}/>
-                        </button>
-                      </div>
-                    </div>
-                  ))
+                      ))
+                    )}
+                  </>
                 )}
-              </>
-            )}
 
-            {(mode === 'clone' || mode === 'design') && (
-              <>
-                {(mode === 'clone' ? profiles.filter(p => !p.instruct) : profiles.filter(p => !!p.instruct)).length === 0 ? (
-                  <p style={{color:'var(--text-secondary)', fontSize:'0.8rem', textAlign:'center', padding:'20px 0'}}>
-                    No saved {mode === 'clone' ? 'cloned profiles' : 'designed voices'} yet.
-                  </p>
-                ) : (
-                  (mode === 'clone' ? profiles.filter(p => !p.instruct) : profiles.filter(p => !!p.instruct)).map(proj => (
-                    <div key={proj.id} className={`history-item ${selectedProfile === proj.id ? 'project-active' : ''}`} style={{position:'relative', borderLeft: proj.is_locked ? '2px solid #b8bb26' : undefined}}>
-                      <div className="history-header">
-                        <div className="history-badge" style={{background: proj.is_locked ? 'rgba(184,187,38,0.2)' : 'rgba(142,192,124,0.15)', color: proj.is_locked ? '#b8bb26' : '#8ec07c'}}>
-                          {proj.is_locked ? <Lock size={10}/> : (mode === 'clone' ? <Fingerprint size={10}/> : <Wand2 size={10}/>)} {proj.is_locked ? 'LOCKED' : (mode === 'clone' ? 'CLONE' : 'DESIGN')}
+                {(mode === 'clone' || mode === 'design') && (
+                  <>
+                    {(mode === 'clone' ? profiles.filter(p => !p.instruct) : profiles.filter(p => !!p.instruct)).length === 0 ? (
+                      <div style={{color:'var(--text-secondary)', textAlign:'center', padding:'24px 12px'}}>
+                        {mode === 'clone' ? <Fingerprint size={28} style={{opacity:0.3, marginBottom:8}} /> : <Wand2 size={28} style={{opacity:0.3, marginBottom:8}} />}
+                        <p style={{fontSize:'0.78rem', margin:0, marginBottom:4}}>No {mode === 'clone' ? 'voice clones' : 'designed voices'} yet</p>
+                        <p style={{fontSize:'0.62rem', margin:0, opacity:0.6}}>{mode === 'clone' ? 'Record or upload audio, then click Save as Voice Profile.' : 'Generate a voice and save it from History.'}</p>
+                      </div>
+                    ) : (
+                      (mode === 'clone' ? profiles.filter(p => !p.instruct) : profiles.filter(p => !!p.instruct)).map(proj => (
+                        <div key={proj.id} className={`history-item ${selectedProfile === proj.id ? 'project-active' : ''}`} style={{position:'relative', borderLeft: proj.is_locked ? '2px solid #b8bb26' : undefined}}>
+                          <div className="history-header">
+                            <div className="history-badge" style={{background: proj.is_locked ? 'rgba(184,187,38,0.2)' : 'rgba(142,192,124,0.15)', color: proj.is_locked ? '#b8bb26' : '#8ec07c'}}>
+                              {proj.is_locked ? <Lock size={10}/> : (mode === 'clone' ? <Fingerprint size={10}/> : <Wand2 size={10}/>)} {proj.is_locked ? 'LOCKED' : (mode === 'clone' ? 'CLONE' : 'DESIGN')}
+                            </div>
+                            {proj.is_locked && (
+                              <div style={{fontSize:'0.55rem', color:'#b8bb26', fontStyle:'italic'}}>Consistent</div>
+                            )}
+                          </div>
+                          <div style={{fontSize:'0.78rem', color:'var(--text-primary)', marginBottom:2, fontWeight:500}}>
+                            {proj.name}
+                          </div>
+                          {proj.instruct && <div style={{fontSize:'0.6rem', color:'#a89984', fontStyle:'italic', marginBottom:2}}>{proj.instruct}</div>}
+                          <div style={{display:'flex', gap:'6px', marginTop:'8px'}}>
+                             <button onClick={(e) => handlePreviewVoice(proj, e)} style={{padding:'4px 8px', background:'rgba(211,134,155,0.1)', border:'1px solid rgba(211,134,155,0.2)', color:'#d3869b', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', flexShrink:0}} title="Preview voice">
+                               {previewLoading === proj.id ? <Loader className="spinner" size={10}/> : <Play size={10}/>}
+                             </button>
+                             <button onClick={() => handleSelectProfile(proj)} style={{flex:1, padding:'4px', background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'#ebdbb2', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', gap:'4px'}}>
+                               <FolderOpen size={10}/> Select
+                             </button>
+                             {proj.is_locked && (
+                               <button onClick={(e) => { e.stopPropagation(); handleUnlockProfile(proj.id); }} style={{padding:'4px 8px', background:'rgba(184,187,38,0.1)', border:'1px solid rgba(184,187,38,0.2)', color:'#b8bb26', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', gap:'2px', flexShrink:0}} title="Unlock: voice will vary between generations">
+                                 <Unlock size={10}/>
+                               </button>
+                             )}
+                             <button onClick={(e) => { e.stopPropagation(); handleDeleteProfile(proj.id); }} style={{padding:'4px 8px', background:'rgba(251,73,52,0.1)', border:'1px solid rgba(251,73,52,0.2)', color:'#fb4934', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', flexShrink:0}}>
+                               <Trash2 size={10}/>
+                             </button>
+                          </div>
                         </div>
-                        {proj.is_locked && (
-                          <div style={{fontSize:'0.55rem', color:'#b8bb26', fontStyle:'italic'}}>Consistent</div>
-                        )}
-                      </div>
-                      <div style={{fontSize:'0.78rem', color:'var(--text-primary)', marginBottom:2, fontWeight:500}}>
-                        {proj.name}
-                      </div>
-                      {proj.instruct && <div style={{fontSize:'0.6rem', color:'#a89984', fontStyle:'italic', marginBottom:2}}>{proj.instruct}</div>}
-                      <div style={{display:'flex', gap:'6px', marginTop:'8px'}}>
-                         <button onClick={() => {
-                           const a = new Audio(`${API}/profiles/${proj.id}/audio`);
-                           a.play().catch(() => toast.error('No audio available'));
-                         }} style={{padding:'4px 8px', background:'rgba(211,134,155,0.1)', border:'1px solid rgba(211,134,155,0.2)', color:'#d3869b', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', flexShrink:0}} title="Preview voice">
-                           <Play size={10}/>
-                         </button>
-                         <button onClick={() => handleSelectProfile(proj)} style={{flex:1, padding:'4px', background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'#ebdbb2', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', gap:'4px'}}>
-                           <FolderOpen size={10}/> Select
-                         </button>
-                         {proj.is_locked && (
-                           <button onClick={(e) => { e.stopPropagation(); handleUnlockProfile(proj.id); }} style={{padding:'4px 8px', background:'rgba(184,187,38,0.1)', border:'1px solid rgba(184,187,38,0.2)', color:'#b8bb26', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', gap:'2px', flexShrink:0}} title="Unlock: voice will vary between generations">
-                             <Unlock size={10}/>
-                           </button>
-                         )}
-                         <button onClick={(e) => { e.stopPropagation(); handleDeleteProfile(proj.id); }} style={{padding:'4px 8px', background:'rgba(251,73,52,0.1)', border:'1px solid rgba(251,73,52,0.2)', color:'#fb4934', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', flexShrink:0}}>
-                           <Trash2 size={10}/>
-                         </button>
-                      </div>
-                    </div>
-                  ))
+                      ))
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -1601,7 +1839,11 @@ function App() {
           <>
             <div style={{fontSize:'0.68rem', color:'var(--text-secondary)', marginBottom:8}}>Generation history · Stored in SQLite</div>
             {(history.length + dubHistory.length) === 0 ? (
-              <p style={{color:'var(--text-secondary)', fontSize:'0.8rem', textAlign:'center'}}>Outputs appear here.</p>
+              <div style={{color:'var(--text-secondary)', textAlign:'center', padding:'24px 12px'}}>
+                <History size={28} style={{opacity:0.3, marginBottom:8}} />
+                <p style={{fontSize:'0.78rem', margin:0, marginBottom:4}}>No generation history</p>
+                <p style={{fontSize:'0.62rem', margin:0, opacity:0.6}}>Synthesize audio or dub a video — results will appear here.</p>
+              </div>
             ) : (
               <>
                 {/* Dub history */}
@@ -1677,7 +1919,7 @@ function App() {
             )}
             
             {(history.length + dubHistory.length) > 0 && (
-              <button onClick={async () => { await fetch(`${API}/history`, {method:'DELETE'}); await fetch(`${API}/dub/history`, {method:'DELETE'}); await loadHistory(); await loadDubHistory(); toast.success('History cleared'); }}
+              <button onClick={async () => { if (!confirm(`Clear all ${history.length + dubHistory.length} history items? This cannot be undone.`)) return; await fetch(`${API}/history`, {method:'DELETE'}); await fetch(`${API}/dub/history`, {method:'DELETE'}); await loadHistory(); await loadDubHistory(); toast.success('History cleared'); }}
                 style={{width:'100%', marginTop:10, padding:5, background:'rgba(251,73,52,0.1)', border:'1px solid rgba(251,73,52,0.3)', borderRadius:6, color:'#fb4934', cursor:'pointer', fontSize:'0.75rem'}}>
                 Clear History
               </button>
@@ -1685,6 +1927,7 @@ function App() {
           </>
         )}
       </div>
+      )}
     </div>
   );
 }
