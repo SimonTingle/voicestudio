@@ -19,7 +19,7 @@ import soundfile as sf
 import torch
 import torchaudio
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Query
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1886,6 +1886,15 @@ async def delete_project(project_id: str):
     conn.commit()
     conn.close()
     return {"deleted": project_id}
+
+# Mount frontend at root. Placed last so it doesn't shadow API routes.
+frontend_path = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+if os.path.exists(frontend_path):
+    app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
+else:
+    @app.get("/")
+    def _dev_fallback():
+        return RedirectResponse(url="http://localhost:5173")
 
 
 if __name__ == "__main__":

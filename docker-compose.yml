@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  omnivoice:
+    build: .
+    container_name: omnivoice-studio
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Map the backend data directory to host for persistent SQLite, voices, and history
+      - ./omnivoice_data:/app/omnivoice_data
+    environment:
+      # Optional: set this parameter to use Pyannote Speaker Diarization
+      - HF_TOKEN=${HF_TOKEN:-}
+    # Zero-config GPU Passthrough (Requires NVIDIA Container Toolkit on host)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

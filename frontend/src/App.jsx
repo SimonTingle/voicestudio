@@ -94,7 +94,7 @@ const LANG_CODES = [
   {code: 'yo', label: 'Yoruba'}, {code: 'zu', label: 'Zulu'}
 ];
 
-const API = "http://localhost:8000";
+const API = import.meta.env.DEV ? "http://localhost:8000" : "";
 
 function formatTime(s) {
   const m = Math.floor(s / 60);

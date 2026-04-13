@@ -98,7 +98,7 @@ The studio is highly functional today, but we are aggressively expanding. Watch 
 - [x] **Advanced Export Suite** — VTT subtitles, per-segment WAV ZIP, compressed MP3, and stem export (vocals + background separate).
 - [x] **Streaming TTS** — Chunked WAV streaming with progressive download and auto-playback.
 - [ ] **Native Desktop Applications** — Dedicated client apps for macOS, Windows, and Linux.
-- [ ] **One-Click Deployment** — Docker image packages engineered for zero-config GPU passthrough.
+- [x] **One-Click Deployment** — Docker image packages engineered for zero-config GPU passthrough.
 
 ---
 
