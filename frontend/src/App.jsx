@@ -13,6 +13,15 @@ import {
   Layers, Music, Package
 } from 'lucide-react';
 
+// Tauri: pre-import window API to avoid async delays in event handlers
+let tauriWindow = null;
+if (typeof window !== 'undefined' && window.__TAURI__) {
+  import('@tauri-apps/api/window').then(m => { tauriWindow = m; });
+}
+const doubleClickMaximize = () => {
+  if (tauriWindow) tauriWindow.getCurrentWindow().toggleMaximize();
+};
+
 const TAGS = [
   '[laughter]', '[sigh]', '[confirmation-en]', '[question-en]', 
   '[question-ah]', '[question-oh]', '[question-ei]', '[question-yi]',
@@ -984,59 +993,61 @@ function App() {
         error: { iconTheme: { primary: '#fb4934', secondary: '#fff' } },
         success: { iconTheme: { primary: '#b8bb26', secondary: '#fff' } }
       }}/>
-      <div className="header-area" style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'8px', overflowX:'auto', paddingBottom:'8px', paddingTop:'4px', gridColumn: '1 / -1', gridRow: '1'}}>
-        <div style={{display:'flex', alignItems:'center', gap:'16px'}}>
-          <div style={{display:'flex', alignItems:'center', gap:'8px', flexShrink:0}}>
-            <button 
-               onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-               style={{display:'flex', alignItems:'center', justifyContent:'center', padding:'4px', background: isSidebarCollapsed ? 'rgba(211,134,155,0.1)' : 'rgba(255,255,255,0.05)', border:`1px solid ${isSidebarCollapsed ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.1)'}`, color: isSidebarCollapsed ? '#d3869b' : '#ebdbb2', borderRadius:4, cursor:'pointer', marginRight: 4}}
-               title="Toggle Sidebar"
-            >
-               {isSidebarCollapsed ? <PanelLeftOpen size={16}/> : <PanelLeftClose size={16}/>}
-            </button>
-            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#d3869b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
-              <circle cx="12" cy="12" r="10" opacity="0.2" fill="#d3869b"/>
+      <div className="header-area" data-tauri-drag-region onDoubleClick={doubleClickMaximize} style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', gridColumn: '1 / -1', gridRow: '1', cursor: 'default'}}>
+        {/* Left cluster: logo + tabs */}
+        <div style={{display:'flex', alignItems:'center', gap:'12px', minWidth:0}}>
+          <button 
+             onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+             style={{display:'flex', alignItems:'center', justifyContent:'center', padding:'4px', background: isSidebarCollapsed ? 'rgba(211,134,155,0.1)' : 'rgba(255,255,255,0.05)', border:`1px solid ${isSidebarCollapsed ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.08)'}`, color: isSidebarCollapsed ? '#d3869b' : '#a89984', borderRadius:4, cursor:'pointer'}}
+             title="Toggle Sidebar"
+          >
+             {isSidebarCollapsed ? <PanelLeftOpen size={14}/> : <PanelLeftClose size={14}/>}
+          </button>
+
+          <div style={{display:'flex', alignItems:'center', gap:'6px', flexShrink:0}}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d3869b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" opacity="0.15" fill="#d3869b"/>
               <circle cx="12" cy="12" r="10" />
               <path d="M12 6v12" />
               <path d="M8 9v6" />
               <path d="M16 9v6" />
             </svg>
-            <div style={{whiteSpace:'nowrap', display:'flex', flexDirection:'column', justifyContent:'center'}}>
-              <h1 style={{fontSize:'1.05rem', margin:0, lineHeight:'1', paddingBottom:'3px'}}>OmniVoice Studio</h1>
-              <span style={{fontSize:'0.55rem', color:'var(--text-secondary)', lineHeight:'1'}}>646 languages · Clone · Design · Dub</span>
-            </div>
+            <span style={{fontSize:'0.85rem', fontWeight:700, color:'#ebdbb2', letterSpacing:'-0.01em', fontFamily:'Outfit, sans-serif'}}>OmniVoice</span>
           </div>
 
-          <div className="tabs" style={{marginBottom: 0, flexShrink: 0, minWidth: '220px'}}>
+          <div style={{width:1, height:16, background:'rgba(255,255,255,0.08)', flexShrink:0}}/>
+
+          <div className="tabs" style={{marginBottom: 0, flexShrink: 0}}>
             <button className={`tab ${mode === 'launchpad' ? 'active' : ''}`} style={{whiteSpace:'nowrap'}} onClick={() => setMode('launchpad')}><Globe size={11}/> Launchpad</button>
             <button className={`tab ${mode === 'clone' ? 'active' : ''}`} style={{whiteSpace:'nowrap'}} onClick={() => setMode('clone')}><Fingerprint size={11}/> Clone</button>
             <button className={`tab ${mode === 'design' ? 'active' : ''}`} style={{whiteSpace:'nowrap'}} onClick={() => setMode('design')}><Wand2 size={11}/> Design</button>
             <button className={`tab ${mode === 'dub' ? 'active' : ''}`} style={{whiteSpace:'nowrap'}} onClick={() => setMode('dub')}><Film size={11}/> Dub</button>
           </div>
         </div>
+
+        {/* Right cluster: scale + stats */}
         <div style={{display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0}}>
-          <div style={{display:'flex', gap:1, background:'rgba(0,0,0,0.3)', padding:2, borderRadius:4, border:'1px solid rgba(255,255,255,0.04)', flexShrink:0}}>
-            <button onClick={() => setUiScale(1)} style={{fontSize:'0.58rem', padding:'1px 4px', border:'none', borderRadius:3, cursor:'pointer', background: uiScale === 1 ? 'rgba(255,255,255,0.1)' : 'transparent', color: uiScale === 1 ? '#fff' : '#a89984', whiteSpace:'nowrap'}}>Small</button>
-            <button onClick={() => setUiScale(1.3)} style={{fontSize:'0.58rem', padding:'1px 4px', border:'none', borderRadius:3, cursor:'pointer', background: uiScale === 1.3 ? 'rgba(255,255,255,0.1)' : 'transparent', color: uiScale === 1.3 ? '#fff' : '#a89984', whiteSpace:'nowrap'}}>Normal</button>
-            <button onClick={() => setUiScale(1.5)} style={{fontSize:'0.58rem', padding:'1px 4px', border:'none', borderRadius:3, cursor:'pointer', background: uiScale === 1.5 ? 'rgba(255,255,255,0.1)' : 'transparent', color: uiScale === 1.5 ? '#fff' : '#a89984', whiteSpace:'nowrap'}}>Max</button>
+          <div style={{display:'flex', gap:1, background:'rgba(0,0,0,0.25)', padding:2, borderRadius:4, border:'1px solid rgba(255,255,255,0.04)', flexShrink:0}}>
+            <button onClick={() => setUiScale(1)} style={{fontSize:'0.55rem', padding:'1px 4px', border:'none', borderRadius:3, cursor:'pointer', background: uiScale === 1 ? 'rgba(255,255,255,0.1)' : 'transparent', color: uiScale === 1 ? '#fff' : '#665c54', whiteSpace:'nowrap'}}>S</button>
+            <button onClick={() => setUiScale(1.3)} style={{fontSize:'0.55rem', padding:'1px 4px', border:'none', borderRadius:3, cursor:'pointer', background: uiScale === 1.3 ? 'rgba(255,255,255,0.1)' : 'transparent', color: uiScale === 1.3 ? '#fff' : '#665c54', whiteSpace:'nowrap'}}>M</button>
+            <button onClick={() => setUiScale(1.5)} style={{fontSize:'0.55rem', padding:'1px 4px', border:'none', borderRadius:3, cursor:'pointer', background: uiScale === 1.5 ? 'rgba(255,255,255,0.1)' : 'transparent', color: uiScale === 1.5 ? '#fff' : '#665c54', whiteSpace:'nowrap'}}>L</button>
           </div>
           {sysStats && (
-            <div style={{display:'flex', gap:'6px', fontSize:'0.55rem', color:'#a89984', background:'rgba(0,0,0,0.3)', padding:'2px 6px', borderRadius:'4px', border:'1px solid rgba(255,255,255,0.04)', whiteSpace:'nowrap', flexShrink:0, alignItems:'center'}}>
-              <span><b style={{color:'#ebdbb2', fontWeight:600}}>RAM</b> {sysStats.ram.toFixed(1)}/{sysStats.total_ram.toFixed(0)}G</span>
-              <span><b style={{color:'#ebdbb2', fontWeight:600}}>CPU</b> {sysStats.cpu.toFixed(0)}%</span>
-              <span style={{borderLeft:'1px solid rgba(255,255,255,0.08)', paddingLeft:6}}>
-                <b style={{color: sysStats.gpu_active ? '#8ec07c' : '#ebdbb2', fontWeight:600}}>VRAM</b> {sysStats.vram.toFixed(1)}G
-                {sysStats.gpu_active && <span style={{color:'#8ec07c', marginLeft:3}}>●</span>}
+            <div style={{display:'flex', gap:'6px', fontSize:'0.52rem', color:'#665c54', background:'rgba(0,0,0,0.25)', padding:'2px 6px', borderRadius:'4px', border:'1px solid rgba(255,255,255,0.04)', whiteSpace:'nowrap', flexShrink:0, alignItems:'center'}}>
+              <span><b style={{color:'#a89984', fontWeight:500}}>RAM</b> {sysStats.ram.toFixed(1)}/{sysStats.total_ram.toFixed(0)}G</span>
+              <span><b style={{color:'#a89984', fontWeight:500}}>CPU</b> {sysStats.cpu.toFixed(0)}%</span>
+              <span style={{borderLeft:'1px solid rgba(255,255,255,0.06)', paddingLeft:5}}>
+                <b style={{color: sysStats.gpu_active ? '#8ec07c' : '#a89984', fontWeight:500}}>VRAM</b> {sysStats.vram.toFixed(1)}G
               </span>
-              <span style={{borderLeft:'1px solid rgba(255,255,255,0.08)', paddingLeft:6, display:'flex', alignItems:'center', gap:3}}>
+              <span style={{borderLeft:'1px solid rgba(255,255,255,0.06)', paddingLeft:5, display:'flex', alignItems:'center', gap:3}}>
                 <span style={{
-                  width:6, height:6, borderRadius:'50%', display:'inline-block',
-                  background: modelStatus === 'ready' ? '#8ec07c' : modelStatus === 'loading' ? '#fabd2f' : '#665c54',
-                  boxShadow: modelStatus === 'loading' ? '0 0 6px rgba(250,189,47,0.5)' : modelStatus === 'ready' ? '0 0 4px rgba(142,192,124,0.4)' : 'none',
+                  width:5, height:5, borderRadius:'50%', display:'inline-block',
+                  background: modelStatus === 'ready' ? '#8ec07c' : modelStatus === 'loading' ? '#fabd2f' : '#504945',
+                  boxShadow: modelStatus === 'loading' ? '0 0 4px rgba(250,189,47,0.4)' : 'none',
                   animation: modelStatus === 'loading' ? 'pulse 1.5s ease-in-out infinite' : 'none',
                 }}/>
-                <span style={{color: modelStatus === 'ready' ? '#8ec07c' : modelStatus === 'loading' ? '#fabd2f' : '#665c54'}}>
-                  {modelStatus === 'ready' ? 'Model Ready' : modelStatus === 'loading' ? 'Loading…' : 'Model Idle'}
+                <span style={{color: modelStatus === 'ready' ? '#8ec07c' : modelStatus === 'loading' ? '#fabd2f' : '#504945'}}>
+                  {modelStatus === 'ready' ? 'Ready' : modelStatus === 'loading' ? 'Loading…' : 'Idle'}
                 </span>
               </span>
             </div>
