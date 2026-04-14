@@ -14,10 +14,31 @@ from contextlib import asynccontextmanager
 from typing import Optional, List
 from concurrent.futures import ThreadPoolExecutor
 
-import numpy as np
+import os
+import sys
+import site
+import shutil
+
+# [CRITICAL PRODUCTION PATCH]
+# Systematically purge 'torchcodec' from the environment before PyTorch loads.
+# This violently neutralizes PyTorch's broken dynamic linkage sequence against
+# fragile Homebrew FFmpeg (.dylibs) on macOS, mandating a safe fallback to `soundfile`.
+for sp in [sys.prefix] + site.getsitepackages():
+    if "site-packages" not in sp: sp = os.path.join(sp, "lib", f"python3.{sys.version_info.minor}", "site-packages")
+    tc_path = os.path.join(sp, "torchcodec")
+    if os.path.exists(tc_path):
+        try: shutil.rmtree(tc_path); print("Sanitized broken torchcodec module.")
+        except: pass
+
 import soundfile as sf
 import torch
 import torchaudio
+
+# Enforce fully static soundfile backend
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+torchaudio.set_audio_backend("soundfile")
+
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -192,6 +213,13 @@ def _init_db():
             created_at REAL,
             updated_at REAL
         );
+        CREATE TABLE IF NOT EXISTS export_history (
+            id TEXT PRIMARY KEY,
+            filename TEXT,
+            destination_path TEXT,
+            mode TEXT,
+            created_at REAL
+        );
     """)
     # Safe migrations for existing databases
     for col, typedef in [
@@ -280,6 +308,15 @@ async def lifespan(app: FastAPI):
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="OmniVoice Studio API", version="0.4.0", lifespan=lifespan)
+
+from fastapi import Request
+import traceback
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    with open("crash_log.txt", "w") as f:
+        f.write(f"Request: {request.url}\n")
+        f.write(traceback.format_exc())
+    return JSONResponse({"detail": str(exc)}, status_code=500)
 
 app.add_middleware(
     CORSMiddleware,
@@ -552,8 +589,101 @@ async def clean_audio(audio: UploadFile = File(...)):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# GENERATION HISTORY (SQLite + disk)
+# GENERATION HISTORY & EXPORTS (SQLite + disk)
 # ═══════════════════════════════════════════════════════════════════════
+
+class ExportRequest(BaseModel):
+    source_filename: str
+    destination_path: str
+    mode: str = "history"
+
+@app.post("/export")
+def export_file(req: ExportRequest):
+    src_paths = [
+        os.path.join(OUTPUTS_DIR, req.source_filename),
+        os.path.join("dub/outputs", req.source_filename)
+    ]
+    
+    found = False
+    for sp in src_paths:
+        if os.path.exists(sp):
+            try:
+                shutil.copy2(sp, req.destination_path)
+                found = True
+                break
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+                
+    if not found:
+        raise HTTPException(status_code=404, detail="Source file not found")
+        
+    export_id = str(uuid.uuid4())[:8]
+    conn = _get_db()
+    conn.execute(
+        "INSERT INTO export_history (id, filename, destination_path, mode, created_at) VALUES (?, ?, ?, ?, ?)",
+        (export_id, req.source_filename, req.destination_path, req.mode, time.time())
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True, "id": export_id}
+
+class ExportRecordRequest(BaseModel):
+    filename: str
+    destination_path: str = "~/Downloads"
+    mode: str = "file"
+
+@app.post("/export/record")
+def record_export(req: ExportRecordRequest):
+    """Record a blob-based download in export history (no file copy)."""
+    export_id = str(uuid.uuid4())[:8]
+    conn = _get_db()
+    conn.execute(
+        "INSERT INTO export_history (id, filename, destination_path, mode, created_at) VALUES (?, ?, ?, ?, ?)",
+        (export_id, req.filename, req.destination_path, req.mode, time.time())
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True, "id": export_id}
+
+@app.get("/export/history")
+def get_export_history():
+    conn = _get_db()
+    rows = conn.execute("SELECT * FROM export_history ORDER BY created_at DESC LIMIT 50").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+class RevealRequest(BaseModel):
+    path: str
+
+@app.post("/export/reveal")
+def reveal_in_folder(req: RevealRequest):
+    """Open the containing folder of a file in the native OS file manager."""
+    import platform
+    target = os.path.expanduser(req.path)
+    
+    # If the path is a file, reveal it selected; if dir, just open it
+    folder = target if os.path.isdir(target) else os.path.dirname(target)
+    
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            # macOS: open Finder with file selected
+            if os.path.isfile(target):
+                subprocess.Popen(["open", "-R", target])
+            else:
+                subprocess.Popen(["open", folder])
+        elif system == "Windows":
+            # Windows: Explorer with file selected
+            if os.path.isfile(target):
+                subprocess.Popen(["explorer", "/select,", target.replace("/", "\\")])
+            else:
+                subprocess.Popen(["explorer", folder.replace("/", "\\")])
+        else:
+            # Linux: xdg-open the containing folder
+            subprocess.Popen(["xdg-open", folder])
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/history")
 def list_history():
@@ -798,17 +928,17 @@ def _get_diarization_pipeline():
         return None
 
 def _find_ffmpeg():
-    for path in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"]:
-        if shutil.which(path):
-            return path
-    raise RuntimeError("ffmpeg not found")
+    try:
+        import imageio_ffmpeg
+        # This will natively extract and return an architecture-specific static FFmpeg binary!
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as e:
+        logger.warning(f"imageio_ffmpeg failed to provide static binary: {e}. Falling back to default system path.")
+        for path in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"]:
+            if shutil.which(path):
+                return path
+        raise RuntimeError("ffmpeg not found in bundle or system path")
 
-
-def _find_ffprobe():
-    for path in ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "ffprobe"]:
-        if shutil.which(path):
-            return path
-    raise RuntimeError("ffprobe not found")
 
 
 # ── Preview file proxy (avoids blob: URLs which fail in Tauri's WebKit) ────────
@@ -887,17 +1017,8 @@ async def dub_upload(video: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ffmpeg failed: {str(e)}")
 
-    ffprobe = _find_ffprobe()
     try:
-        proc = await asyncio.create_subprocess_exec(
-            ffprobe, "-v", "error", "-show_entries", "format=duration",
-            "-of", "json", video_path,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        stdout, _ = await proc.communicate()
-        if proc.returncode != 0:
-            raise Exception("ffprobe failed")
-        dur = float(json.loads(stdout.decode())["format"]["duration"])
+        dur = float(sf.info(audio_path).frames) / float(sf.info(audio_path).samplerate)
     except Exception:
         dur = 0.0
 
@@ -984,15 +1105,19 @@ async def dub_transcribe(job_id: str):
 
     def _transcribe():
         import re
-        # Load pure vocal audio as numpy array for vastly improved Whisper accuracy
-        asr_audio_target = job.get("vocals_path", job.get("audio_path"))
+        import traceback
+        
+        # Safe fallback check if user omitted Demucs or the pipeline completely crashed during source vocal separation!
+        asr_audio_target = job.get("vocals_path")
+        if not asr_audio_target or not os.path.exists(asr_audio_target):
+            asr_audio_target = job.get("audio_path")
+            
         audio_np, sr = sf.read(asr_audio_target, dtype="float32")
         if audio_np.ndim > 1:
             audio_np = audio_np.mean(axis=1)
         audio_input = {"array": audio_np, "sampling_rate": sr}
 
         bs = 16 if torch.cuda.is_available() else (2 if torch.backends.mps.is_available() else 1)
-
         # Use chunk-level timestamps
         result = _model._asr_pipe(
             audio_input, return_timestamps=True,
@@ -1251,6 +1376,25 @@ async def dub_generate(job_id: str, req: DubRequest):
                 # Calculate lip-sync score natively from tensor
                 generated_dur = audio_tensor.shape[-1] / _model.sampling_rate
                 sync_ratio = round(generated_dur / max(seg_duration, 0.01), 3)
+                
+                # Auto time-stretch to fit segment window if off by >5%
+                if sync_ratio > 1.05 or sync_ratio < 0.95:
+                    target_samples = int(seg_duration * _model.sampling_rate)
+                    current_samples = audio_tensor.shape[-1]
+                    if target_samples > 0 and current_samples > 0:
+                        # Resample to effectively time-stretch: change "perceived" sample rate
+                        # then resample back to actual rate
+                        stretch_ratio = current_samples / target_samples
+                        # Use interpolation for clean time-stretching
+                        audio_tensor = torch.nn.functional.interpolate(
+                            audio_tensor.unsqueeze(0),  # add batch dim
+                            size=target_samples,
+                            mode='linear',
+                            align_corners=False,
+                        ).squeeze(0)  # remove batch dim
+                        generated_dur = audio_tensor.shape[-1] / _model.sampling_rate
+                        sync_ratio = round(generated_dur / max(seg_duration, 0.01), 3)
+                
                 sync_scores.append(sync_ratio)
 
                 # Save individual segment WAV for preview

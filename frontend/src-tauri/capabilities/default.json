@@ -11,6 +11,10 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-set-fullscreen",
     "core:window:allow-minimize",
-    "core:window:allow-close"
+    "core:window:allow-close",
+    "dialog:allow-save",
+    "dialog:allow-open",
+    "dialog:allow-message",
+    "dialog:allow-ask"
   ]
 }

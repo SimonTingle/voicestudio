@@ -10,7 +10,7 @@ import {
   FileText, Loader, Check, AlertCircle, Plus, User, Save, Languages, Headphones,
   FolderOpen, FolderPlus, Pencil, Clock, Lock, Unlock, Mic, MicOff, Square,
   CheckCircle, Circle, ChevronRight, Target, PanelLeftClose, PanelLeftOpen, Scale,
-  Layers, Music, Package
+  Layers, Music, Package, DownloadCloud
 } from 'lucide-react';
 
 // Tauri: pre-import window API to avoid async delays in event handlers
@@ -175,9 +175,10 @@ function App() {
   const [langSearch, setLangSearch] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [history, setHistory] = useState([]);
+  const [exportHistory, setExportHistory] = useState([]);
   
   const [speed, setSpeed] = useState(1.0);
-  const [steps, setSteps] = useState(16);
+  const [steps, setSteps] = useState(16); // Must be ~16 to prevent ODE destabilization
   const [cfg, setCfg] = useState(2.0);
   const [showOverrides, setShowOverrides] = useState(false);
   const [denoise, setDenoise] = useState(true);
@@ -349,6 +350,13 @@ function App() {
     } catch (e) {}
   }, []);
 
+  const loadExportHistory = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/export/history`);
+      if (res.ok) setExportHistory(await res.json());
+    } catch (e) {}
+  }, []);
+
   useEffect(() => {
     // Wait for backend to come alive before loading data (handles Tauri startup race)
     let cancelled = false;
@@ -368,6 +376,7 @@ function App() {
       loadHistory();
       loadDubHistory();
       loadProjects();
+      loadExportHistory();
     };
     loadAll();
     // Restore local UI state
@@ -905,14 +914,71 @@ function App() {
     } catch (err) { setDubError(err.message); setDubStep('editing'); }
   };
 
-  const triggerDownload = (url, fallbackName) => {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fallbackName || 'download';
-    a.target = '_blank';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const handleNativeExport = async (e, sourceIdentifier, fallbackName, mode) => {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const ext = fallbackName.includes('.') ? fallbackName.split('.').pop() : 'wav';
+      const destPath = await save({ defaultPath: fallbackName, filters: [{ name: 'Media', extensions: [ext] }] });
+      if (!destPath) return; // User cancelled
+
+      // Tell Python backend to natively execute the copy bypassing Blob serialization!
+      const res = await fetch(`${API}/export`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ source_filename: sourceIdentifier, destination_path: destPath, mode })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Export failed');
+      }
+      const data = await res.json();
+      toast.success(`Exported: ${fallbackName}`);
+      loadExportHistory();
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to bridge save dialog to rust/python backend.');
+    }
+  };
+  const revealInFolder = async (filePath) => {
+    try {
+      const res = await fetch(`${API}/export/reveal`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ path: filePath })
+      });
+      if (!res.ok) throw new Error('Failed to open folder');
+    } catch (err) {
+      toast.error(`Could not open folder: ${err.message}`);
+    }
+  };
+  const triggerDownload = async (url, fallbackName) => {
+    try {
+      toast.loading(`Processing ${fallbackName}...`, { id: fallbackName });
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Download failed");
+      const blob = await response.blob();
+      const localUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = localUrl;
+      a.download = fallbackName || 'download';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(localUrl);
+      toast.success(`Downloaded ${fallbackName}`, { id: fallbackName });
+      // Record to export history
+      try {
+        const ext = fallbackName.split('.').pop() || '';
+        const mode = ['mp4','mov','mkv','webm'].includes(ext) ? 'video' : ['wav','mp3','flac'].includes(ext) ? 'audio' : 'file';
+        await fetch(`${API}/export/record`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ filename: fallbackName, destination_path: `~/Downloads/${fallbackName}`, mode })
+        });
+        loadExportHistory();
+      } catch (_) {}
+    } catch (err) {
+      console.error(err);
+      toast.error(`Download error: ${err.message}`, { id: fallbackName });
+    }
   };
   const handleDubDownload = () => {
     // Build selected tracks from all known tracks, matching the checkbox `!== false` logic
@@ -973,9 +1039,10 @@ function App() {
     }
   };
 
-  const loadProject = async (project) => {
+  const loadProject = async (projectOrId) => {
+    const pid = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
     try {
-      const res = await fetch(`${API}/projects/${project.id}`);
+      const res = await fetch(`${API}/projects/${pid}`);
       if (!res.ok) throw new Error('Failed to load project');
       const data = await res.json();
       const s = data.state || {};
@@ -2034,32 +2101,42 @@ function App() {
       {/* ── SIDEBAR ── */}
       {
         <div className="glass-panel history-panel" style={{display:'flex', flexDirection:'column'}}>
-          <div style={{display:'flex', gap:'4px', padding:'6px', borderBottom:'1px solid var(--glass-border)', background:'rgba(0,0,0,0.15)', flexShrink:0}}>
+          <div style={{display:'flex', gap:0, padding:0, borderBottom:'1px solid var(--glass-border)', background:'rgba(0,0,0,0.2)', flexShrink:0, flexDirection: isSidebarCollapsed ? 'column' : 'row'}}>
             <button onClick={() => setSidebarTab('projects')} style={{
-              flex:1, padding: isSidebarCollapsed ? '4px 0' : '4px 6px', fontSize:'0.72rem', fontWeight:600, cursor:'pointer', border:`1px solid ${sidebarTab === 'projects' ? 'rgba(184,187,38,0.3)' : 'transparent'}`,
-              background: sidebarTab === 'projects' ? 'rgba(184,187,38,0.15)' : 'transparent',
-              color: sidebarTab === 'projects' ? '#b8bb26' : '#a89984',
-              borderRadius:4, whiteSpace: 'nowrap', transition:'all 0.2s ease', overflow:'hidden'
-            }} title={isSidebarCollapsed ? `Projects (${mode === 'dub' ? studioProjects.length : (mode === 'clone' ? profiles.filter(p => !p.instruct).length : profiles.filter(p => !!p.instruct).length)})` : undefined}><FolderOpen size={12} style={{verticalAlign:'middle', marginRight: isSidebarCollapsed ? 0 : 4}}/> 
-              {!isSidebarCollapsed && `Projects (${mode === 'dub' ? studioProjects.length : (mode === 'clone' ? profiles.filter(p => !p.instruct).length : profiles.filter(p => !!p.instruct).length)})`}
+              flex:1, padding: isSidebarCollapsed ? '6px 0' : '4px 0', fontSize:'0.65rem', fontWeight:700, cursor:'pointer', borderLeft:'none', borderRight: isSidebarCollapsed ? 'none' : '1px solid rgba(255,255,255,0.06)', borderTop:'none',
+              borderBottom: sidebarTab === 'projects' ? '2px solid #b8bb26' : '2px solid transparent',
+              background: sidebarTab === 'projects' ? 'rgba(184,187,38,0.08)' : 'transparent',
+              color: sidebarTab === 'projects' ? '#b8bb26' : '#7c6f64',
+              borderRadius:0, whiteSpace:'nowrap', transition:'all 0.15s ease', overflow:'hidden', display:'flex', justifyContent:'center', alignItems:'center', gap:3, letterSpacing:'0.02em'
+            }} title="Projects"><FolderOpen size={11}/> 
+              {!isSidebarCollapsed && <><strong>Projects</strong> <span style={{opacity:0.6, fontWeight:400}}>·</span> <span style={{fontWeight:400}}>{mode === 'dub' ? studioProjects.length : (mode === 'clone' ? profiles.filter(p => !p.instruct).length : profiles.filter(p => !!p.instruct).length)}</span></>}
             </button>
             <button onClick={() => setSidebarTab('history')} style={{
-              flex:1, padding: isSidebarCollapsed ? '4px 0' : '4px 6px', fontSize:'0.72rem', fontWeight:600, cursor:'pointer', border:`1px solid ${sidebarTab === 'history' ? 'rgba(211,134,155,0.3)' : 'transparent'}`,
-              background: sidebarTab === 'history' ? 'rgba(211,134,155,0.15)' : 'transparent',
-              color: sidebarTab === 'history' ? '#d3869b' : '#a89984',
-              borderRadius:4, whiteSpace: 'nowrap', transition:'all 0.2s ease', overflow:'hidden'
-            }} title={isSidebarCollapsed ? `History (${history.length + dubHistory.length})` : undefined}><History size={12} style={{verticalAlign:'middle', marginRight: isSidebarCollapsed ? 0 : 4}}/> 
-              {!isSidebarCollapsed && `History (${history.length + dubHistory.length})`}
+              flex:1, padding: isSidebarCollapsed ? '6px 0' : '4px 0', fontSize:'0.65rem', fontWeight:700, cursor:'pointer', borderLeft:'none', borderRight: isSidebarCollapsed ? 'none' : '1px solid rgba(255,255,255,0.06)', borderTop:'none',
+              borderBottom: sidebarTab === 'history' ? '2px solid #d3869b' : '2px solid transparent',
+              background: sidebarTab === 'history' ? 'rgba(211,134,155,0.08)' : 'transparent',
+              color: sidebarTab === 'history' ? '#d3869b' : '#7c6f64',
+              borderRadius:0, whiteSpace:'nowrap', transition:'all 0.15s ease', overflow:'hidden', display:'flex', justifyContent:'center', alignItems:'center', gap:3, letterSpacing:'0.02em'
+            }} title="History"><History size={11}/> 
+              {!isSidebarCollapsed && <><strong>History</strong> <span style={{opacity:0.6, fontWeight:400}}>·</span> <span style={{fontWeight:400}}>{history.length + dubHistory.length}</span></>}
+            </button>
+            <button onClick={() => setSidebarTab('downloads')} style={{
+              flex:1, padding: isSidebarCollapsed ? '6px 0' : '4px 0', fontSize:'0.65rem', fontWeight:700, cursor:'pointer', border:'none', borderTop:'none',
+              borderBottom: sidebarTab === 'downloads' ? '2px solid #8ec07c' : '2px solid transparent',
+              background: sidebarTab === 'downloads' ? 'rgba(142,192,124,0.08)' : 'transparent',
+              color: sidebarTab === 'downloads' ? '#8ec07c' : '#7c6f64',
+              borderRadius:0, whiteSpace:'nowrap', transition:'all 0.15s ease', overflow:'hidden', display:'flex', justifyContent:'center', alignItems:'center', gap:3, letterSpacing:'0.02em'
+            }} title="Downloads"><DownloadCloud size={11}/> 
+              {!isSidebarCollapsed && <><strong>Exports</strong> <span style={{opacity:0.6, fontWeight:400}}>·</span> <span style={{fontWeight:400}}>{exportHistory.length}</span></>}
             </button>
           </div>
 
-        <div style={{flex:1, overflowY:'auto', padding:'8px', display: isSidebarCollapsed ? 'none' : 'block'}}>
+        <div style={{flex:1, overflowY:'auto', padding: isSidebarCollapsed ? '8px 4px' : '8px', display: 'flex', flexDirection: 'column', alignItems: isSidebarCollapsed ? 'center' : 'stretch', gap: isSidebarCollapsed ? 8 : 0}}>
         {/* ── PROJECTS TAB ── */}
         {sidebarTab === 'projects' && (
           <>
-
             {/* Save current work as dub project button (only in dub mode) */}
-            {mode === 'dub' && (dubStep !== 'idle' || dubVideoFile) && (
+            {mode === 'dub' && (dubStep !== 'idle' || dubVideoFile) && !isSidebarCollapsed && (
               <button onClick={saveProject} style={{
                 width:'100%', marginBottom:10, padding:'7px 12px', display:'flex', alignItems:'center', justifyContent:'center', gap:6,
                 background: activeProjectId ? 'rgba(184,187,38,0.15)' : 'rgba(131,165,152,0.15)',
@@ -2070,16 +2147,22 @@ function App() {
                 <Save size={13}/> {activeProjectId ? 'Save Dub Project' : 'Save as New Dub Project'}
               </button>
             )}
+            {mode === 'dub' && (dubStep !== 'idle' || dubVideoFile) && isSidebarCollapsed && (
+              <button onClick={saveProject} title={activeProjectId ? 'Save Dub Project' : 'Save as New Dub Project'} style={{
+                width:'32px', height:'32px', padding:0, display:'flex', alignItems:'center', justifyContent:'center', marginBottom:8, flexShrink:0,
+                background: activeProjectId ? 'rgba(184,187,38,0.15)' : 'rgba(131,165,152,0.15)', border: `1px solid ${activeProjectId ? 'rgba(184,187,38,0.35)' : 'rgba(131,165,152,0.3)'}`,
+                borderRadius:6, cursor:'pointer', color: activeProjectId ? '#b8bb26' : '#83a598',
+              }}><Save size={14}/></button>
+            )}
 
-            <div 
-              style={{fontSize:'0.68rem', color:'var(--text-secondary)', marginBottom:8, display:'flex', justifyContent:'space-between', alignItems:'center', cursor:'pointer', padding:'2px 0'}}
-              onClick={() => setIsSidebarProjectsCollapsed(!isSidebarProjectsCollapsed)}
-            >
-              <span>{mode === 'dub' ? 'Studio Projects (Dubbing)' : (mode === 'clone' ? 'Voice Clones (Audio)' : 'Designed Voices (Synthetic)')}</span>
-              {isSidebarProjectsCollapsed ? <ChevronDown size={12}/> : <ChevronUp size={12}/>}
-            </div>
+            {!isSidebarCollapsed && (
+              <div style={{fontSize:'0.68rem', color:'var(--text-secondary)', marginBottom:8, display:'flex', justifyContent:'space-between', alignItems:'center', cursor:'pointer', padding:'2px 0'}} onClick={() => setIsSidebarProjectsCollapsed(!isSidebarProjectsCollapsed)}>
+                <span>{mode === 'dub' ? 'Studio Projects (Dubbing)' : (mode === 'clone' ? 'Voice Clones (Audio)' : 'Designed Voices (Synthetic)')}</span>
+                {isSidebarProjectsCollapsed ? <ChevronDown size={12}/> : <ChevronUp size={12}/>}
+              </div>
+            )}
 
-            {!isSidebarProjectsCollapsed && (
+            {!isSidebarProjectsCollapsed && !isSidebarCollapsed && (
               <>
                 {mode === 'dub' && (
                   <>
@@ -2168,13 +2251,34 @@ function App() {
                 )}
               </>
             )}
+
+            {isSidebarCollapsed && mode === 'dub' && studioProjects.map(proj => (
+              <div key={proj.id} title={`Load: ${proj.name}`} onClick={() => loadProject(proj.id)} style={{
+                width:'32px', height:'32px', flexShrink:0, display:'flex', justifyContent:'center', alignItems:'center', borderRadius:'6px', cursor:'pointer',
+                background: activeProjectId === proj.id ? 'rgba(184,187,38,0.2)' : 'rgba(255,255,255,0.05)', border:`1px solid ${activeProjectId === proj.id ? 'rgba(184,187,38,0.5)' : 'transparent'}`,
+                color: activeProjectId === proj.id ? '#b8bb26' : '#a89984'
+              }}>
+                <Film size={14}/>
+              </div>
+            ))}
+
+            {isSidebarCollapsed && (mode === 'clone' || mode === 'design') && (mode === 'clone' ? profiles.filter(p => !p.instruct) : profiles.filter(p => !!p.instruct)).map(proj => (
+              <div key={proj.id} title={`Select: ${proj.name}`} onClick={() => handleSelectProfile(proj)} style={{
+                width:'32px', height:'32px', flexShrink:0, display:'flex', justifyContent:'center', alignItems:'center', borderRadius:'6px', cursor:'pointer', position:'relative',
+                background: selectedProfile === proj.id ? 'rgba(184,187,38,0.2)' : 'rgba(255,255,255,0.05)', border:`1px solid ${selectedProfile === proj.id ? 'rgba(184,187,38,0.5)' : 'transparent'}`,
+                color: selectedProfile === proj.id ? '#b8bb26' : '#a89984'
+              }}>
+                {mode === 'clone' ? <Fingerprint size={14}/> : <Wand2 size={14}/>}
+                {proj.is_locked && <Lock size={8} style={{position:'absolute', bottom:2, right:2, color:'#b8bb26'}}/>}
+              </div>
+            ))}
           </>
         )}
 
         {/* ── HISTORY TAB ── */}
         {sidebarTab === 'history' && (
           <>
-            <div style={{fontSize:'0.68rem', color:'var(--text-secondary)', marginBottom:8}}>Generation history · Stored in SQLite</div>
+            {!isSidebarCollapsed && <div style={{fontSize:'0.68rem', color:'var(--text-secondary)', marginBottom:8}}>Generation history · Stored in SQLite</div>}
             {(history.length + dubHistory.length) === 0 ? (
               <div style={{color:'var(--text-secondary)', textAlign:'center', padding:'24px 12px'}}>
                 <History size={28} style={{opacity:0.3, marginBottom:8}} />
@@ -2184,7 +2288,7 @@ function App() {
             ) : (
               <>
                 {/* Dub history */}
-                {dubHistory.map(item => (
+                {!isSidebarCollapsed && dubHistory.map(item => (
                   <div key={`dub-${item.id}`} className="history-item">
                     <div className="history-header">
                       <div className="history-badge" style={{background:'rgba(131,165,152,0.15)', color:'#83a598'}}>
@@ -2216,7 +2320,7 @@ function App() {
                 ))}
 
                 {/* Clone/Design history */}
-                {history.map(item => (
+                {!isSidebarCollapsed && history.map(item => (
                   <div key={item.id} className="history-item">
                     <div className="history-header">
                       <div className="history-badge">
@@ -2239,9 +2343,9 @@ function App() {
                             <Lock size={10}/> Lock
                           </button>
                         )}
-                        <a href={`${API}/audio/${item.audio_path}`} download style={{padding:'4px 8px', background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'#ebdbb2', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', gap:'4px', textDecoration:'none'}}>
+                        <button onClick={(e) => handleNativeExport(e, item.audio_path, item.audio_path, item.mode)} style={{padding:'4px 8px', background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'#ebdbb2', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', gap:'4px'}}>
                           <DownloadIcon size={10}/>
-                        </a>
+                        </button>
                         <button onClick={() => restoreHistory(item)} style={{padding:'4px 8px', background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'#ebdbb2', borderRadius:'4px', fontSize:'0.7rem', cursor:'pointer', display:'flex', justifyContent:'center', alignItems:'center', gap:'4px'}}>
                           <FolderOpen size={10}/>
                         </button>
@@ -2254,14 +2358,89 @@ function App() {
                 ))}
               </>
             )}
+
+            {isSidebarCollapsed && dubHistory.map(item => (
+              <div key={`dub-${item.id}`} title={`Dub: ${item.filename}`} onClick={() => restoreDubHistory(item)} style={{
+                width:'32px', height:'32px', flexShrink:0, display:'flex', justifyContent:'center', alignItems:'center', borderRadius:'6px', cursor:'pointer', background:'rgba(255,255,255,0.05)', border:'1px solid transparent', color:'#83a598'
+              }}>
+                <Film size={14}/>
+              </div>
+            ))}
             
-            {(history.length + dubHistory.length) > 0 && (
+            {isSidebarCollapsed && history.map(item => (
+              <div key={item.id} title={`${item.mode||'history'}: ${item.text}`} onClick={() => restoreHistory(item)} style={{
+                width:'32px', height:'32px', flexShrink:0, display:'flex', justifyContent:'center', alignItems:'center', borderRadius:'6px', cursor:'pointer', background:'rgba(255,255,255,0.05)', border:'1px solid transparent', color: item.mode === 'clone' ? '#d3869b' : '#b8bb26'
+              }}>
+                {item.mode === 'clone' ? <Fingerprint size={14}/> : <Wand2 size={14}/>}
+              </div>
+            ))}
+            
+            {(history.length + dubHistory.length) > 0 && !isSidebarCollapsed && (
               <button onClick={async () => { if (!confirm(`Clear all ${history.length + dubHistory.length} history items? This cannot be undone.`)) return; await fetch(`${API}/history`, {method:'DELETE'}); await fetch(`${API}/dub/history`, {method:'DELETE'}); await loadHistory(); await loadDubHistory(); toast.success('History cleared'); }}
+
                 style={{width:'100%', marginTop:10, padding:5, background:'transparent', border:'1px solid rgba(255,255,255,0.06)', borderRadius:6, color:'#665c54', cursor:'pointer', fontSize:'0.65rem', transition:'all 0.2s ease'}}
                 onMouseEnter={e => { e.target.style.borderColor = 'rgba(251,73,52,0.3)'; e.target.style.color = '#fb4934'; }}
                 onMouseLeave={e => { e.target.style.borderColor = 'rgba(255,255,255,0.06)'; e.target.style.color = '#665c54'; }}>
                 <Trash2 size={10} style={{verticalAlign:'middle', marginRight:4}}/> Clear History
               </button>
+            )}
+          </>
+        )}
+
+        {/* ── DOWNLOADS TAB ── */}
+        {sidebarTab === 'downloads' && (
+          <>
+            {!isSidebarCollapsed && <div style={{fontSize:'0.68rem', color:'var(--text-secondary)', marginBottom:8}}>History of natively exported media</div>}
+            {exportHistory.length === 0 ? (
+              <div style={{color:'var(--text-secondary)', textAlign:'center', padding:'24px 12px'}}>
+                <DownloadCloud size={28} style={{opacity:0.3, marginBottom:8}} />
+                <p style={{fontSize:'0.78rem', margin:0, marginBottom:4}}>No downloaded outputs</p>
+                <p style={{fontSize:'0.62rem', margin:0, opacity:0.6}}>Export a file via Tauri to see it tracked here.</p>
+              </div>
+            ) : (
+              <>
+                {!isSidebarCollapsed && exportHistory.map(item => (
+                  <div key={item.id} className="history-item">
+                     <div className="history-header">
+                       <div className="history-badge" style={{background:'rgba(142,192,124,0.15)', color:'#8ec07c'}}>
+                         <DownloadCloud size={10}/> {item.mode.toUpperCase()}
+                       </div>
+                       <div className="history-text" style={{margin:0, opacity:0.6}}>{new Date(item.created_at * 1000).toLocaleTimeString()}</div>
+                     </div>
+                     <div style={{fontSize:'0.72rem', color:'var(--text-primary)', marginTop:6, wordWrap:'break-word', fontWeight:600}}>
+                       {item.filename}
+                     </div>
+                     <div style={{fontSize:'0.58rem', color:'#8ec07c', opacity:0.8, marginTop:4, wordWrap:'break-word', background:'rgba(0,0,0,0.15)', padding:'3px 5px', borderRadius:3, fontFamily:'monospace'}}>
+                       {item.destination_path}
+                     </div>
+                     <div style={{display:'flex', gap:4, marginTop:6}}>
+                       <button onClick={() => revealInFolder(item.destination_path)} style={{
+                         flex:1, padding:'3px 6px', background:'rgba(142,192,124,0.1)', border:'1px solid rgba(142,192,124,0.25)',
+                         color:'#8ec07c', borderRadius:4, fontSize:'0.62rem', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:4, fontWeight:600, transition:'all 0.15s ease'
+                       }}
+                       onMouseEnter={e => { e.currentTarget.style.background='rgba(142,192,124,0.2)'; e.currentTarget.style.borderColor='rgba(142,192,124,0.4)'; }}
+                       onMouseLeave={e => { e.currentTarget.style.background='rgba(142,192,124,0.1)'; e.currentTarget.style.borderColor='rgba(142,192,124,0.25)'; }}
+                       >
+                         <FolderOpen size={10}/> Open Folder
+                       </button>
+                     </div>
+                  </div>
+                ))}
+
+                {isSidebarCollapsed && exportHistory.map(item => (
+                  <div key={item.id} title={`Exported: ${item.filename}\nTo: ${item.destination_path}\nClick to open folder`}
+                    onClick={() => revealInFolder(item.destination_path)}
+                    style={{
+                    width:'32px', height:'32px', flexShrink:0, display:'flex', justifyContent:'center', alignItems:'center', borderRadius:'6px', cursor:'pointer', background:'rgba(255,255,255,0.05)', border:'1px solid transparent', color:'#8ec07c',
+                    transition:'all 0.15s ease'
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background='rgba(142,192,124,0.15)'; e.currentTarget.style.borderColor='rgba(142,192,124,0.3)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background='rgba(255,255,255,0.05)'; e.currentTarget.style.borderColor='transparent'; }}
+                  >
+                    <FolderOpen size={14}/>
+                  </div>
+                ))}
+              </>
             )}
           </>
         )}
