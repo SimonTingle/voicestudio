@@ -17,6 +17,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             app.handle().plugin(tauri_plugin_dialog::init())?;
+            app.handle().plugin(tauri_plugin_window_state::Builder::default().build())?;
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

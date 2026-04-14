@@ -290,6 +290,63 @@ function App() {
   // ── LOAD DATA FROM SERVER ──
   const [sysStats, setSysStats] = useState(null);
 
+  // ── DESKTOP NATIVE INTEGRATION ──
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    // 1. Prevent default right-click to hide web nature
+    const handleContextMenu = (e) => {
+      // allow on inputs/textareas for copy/paste
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      e.preventDefault();
+    };
+    
+    // 2. Prevent keyboard quicks (reload, zoom, print)
+    const handleKeyDown = (e) => {
+      if (!e.metaKey && !e.ctrlKey) return;
+      if (['r', 'p', '=', '-', '+'].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+      }
+    };
+    
+    // 3. Prevent pinch-to-zoom
+    const handleWheel = (e) => {
+      if (e.ctrlKey) e.preventDefault();
+    };
+    
+    // 4. Global Drag and drop for seamless native feeling
+    const handleDrop = (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer?.files[0];
+      if (!file) return;
+      
+      const isVideo = file.name.match(/\.(mp4|mov|mkv|webm|avi)$/i);
+      const isAudio = file.name.match(/\.(mp3|wav|flac|m4a|ogg)$/i);
+      if (isVideo || isAudio) {
+        setMode('dub');
+        setDubVideoFile(file);
+        fileToMediaUrl(file, null).then(urls => setDubLocalBlobUrl(urls));
+        setDubFilename(file.name);
+        setDubStep('idle');
+      }
+    };
+    const handleDragOver = (e) => e.preventDefault();
+
+    window.addEventListener('contextmenu', handleContextMenu);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('wheel', handleWheel, { passive: false });
+    window.addEventListener('drop', handleDrop);
+    window.addEventListener('dragover', handleDragOver);
+    
+    return () => {
+      window.removeEventListener('contextmenu', handleContextMenu);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('wheel', handleWheel);
+      window.removeEventListener('drop', handleDrop);
+      window.removeEventListener('dragover', handleDragOver);
+    };
+  }, []);
+
   useEffect(() => {
     let interval = null;
     let cancelled = false;
@@ -606,15 +663,18 @@ function App() {
       const formData = new FormData();
       formData.append("text", previewText);
       formData.append("profile_id", proj.id);
+      
       if (reqLang && reqLang !== 'Auto') {
         formData.append("language", reqLang);
       }
-      formData.append("num_step", steps || 16);
       
+      formData.append("num_step", steps || 16);
       const res = await fetch(`${API}/generate`, { method: "POST", body: formData });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
+
       toast.success('Preview ready!', { id: toastId });
+      
       playBlobAudio(blob).catch(() => toast.error('Playback failed', { id: toastId }));
       
       await loadHistory();
@@ -654,12 +714,14 @@ function App() {
       if (dubLang !== 'Auto') formData.append("language", dubLang);
       
       formData.append("num_step", steps || 16);
+      formData.append("guidance_scale", cfg || 2.0);
       if (seg.speed && seg.speed !== 1.0) formData.append("speed", seg.speed);
       
       const res = await fetch(`${API}/generate`, { method: "POST", body: formData });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
       toast.success('Preview ready!', { id: toastId });
+      
       playBlobAudio(blob).catch(() => toast.error('Playback failed', { id: toastId }));
     } catch (err) {
       toast.error('Preview failed: ' + err.message, { id: toastId });
@@ -1137,9 +1199,12 @@ function App() {
         error: { iconTheme: { primary: '#fb4934', secondary: '#fff' } },
         success: { iconTheme: { primary: '#b8bb26', secondary: '#fff' } }
       }}/>
-      <div className="header-area" data-tauri-drag-region onDoubleClick={doubleClickMaximize} style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', gridColumn: '1 / -1', gridRow: '1', cursor: 'default'}}>
-        {/* Left cluster: logo + tabs */}
-        <div style={{display:'flex', alignItems:'center', gap:'12px', minWidth:0}}>
+      <div className="header-area" data-tauri-drag-region onDoubleClick={doubleClickMaximize} style={{position:'relative', display:'flex', justifyContent:'space-between', alignItems:'center', gridColumn: '1 / -1', gridRow: '1', cursor: 'default'}}>
+        {/* Empty placeholder for traffic light buffer */}
+        <div style={{minWidth: 80}}></div>
+
+        {/* Center cluster: logo + tabs */}
+        <div style={{position:'absolute', left:'50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', gap:'16px', minWidth:0, zIndex:10}}>
           <div style={{display:'flex', alignItems:'center', gap:'6px', flexShrink:0}}>
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d3869b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" opacity="0.15" fill="#d3869b"/>
@@ -1162,7 +1227,7 @@ function App() {
         </div>
 
         {/* Right cluster: scale + stats */}
-        <div style={{display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0, zIndex: 10}}>
           <div style={{display:'flex', gap:1, background:'rgba(0,0,0,0.25)', padding:2, borderRadius:4, border:'1px solid rgba(255,255,255,0.04)', flexShrink:0}}>
             <button onClick={() => setUiScale(1)} style={{fontSize:'0.55rem', padding:'1px 4px', border:'none', borderRadius:3, cursor:'pointer', background: uiScale === 1 ? 'rgba(255,255,255,0.1)' : 'transparent', color: uiScale === 1 ? '#fff' : '#665c54', whiteSpace:'nowrap'}}>S</button>
             <button onClick={() => setUiScale(1.3)} style={{fontSize:'0.55rem', padding:'1px 4px', border:'none', borderRadius:3, cursor:'pointer', background: uiScale === 1.3 ? 'rgba(255,255,255,0.1)' : 'transparent', color: uiScale === 1.3 ? '#fff' : '#665c54', whiteSpace:'nowrap'}}>M</button>
@@ -1673,7 +1738,13 @@ function App() {
                     <div style={{display:'flex', gap:4, marginBottom:4, flexWrap:'wrap', alignItems:'flex-end'}}>
                       <div style={{flex:1, minWidth:90}}>
                         <div className="label-row"><Globe className="label-icon" size={9}/> Language</div>
-                        <select className="input-base" value={dubLang} onChange={e => setDubLang(e.target.value)} style={{fontSize:'0.65rem'}}>
+                        <select className="input-base" value={dubLang} onChange={e => {
+                          const lang = e.target.value;
+                          setDubLang(lang);
+                          // Auto-sync ISO code when language name changes
+                          const match = LANG_CODES.find(lc => lc.label.toLowerCase() === lang.toLowerCase());
+                          if (match) setDubLangCode(match.code);
+                        }} style={{fontSize:'0.65rem'}}>
                           {filteredDubLangs.map(l => <option key={l} value={l}>{l}</option>)}
                         </select>
                       </div>

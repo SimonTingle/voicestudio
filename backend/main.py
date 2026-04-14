@@ -758,16 +758,23 @@ def _run_inference(
     text, language, ref_audio_path, ref_text, instruct, duration,
     num_step, guidance_scale, speed, t_shift, denoise,
     postprocess_output, layer_penalty_factor, position_temperature,
-    class_temperature,
+    class_temperature, used_seed,
 ):
+    if used_seed is not None:
+        torch.manual_seed(used_seed)
+
+    kwargs = {}
+    if t_shift is not None: kwargs["t_shift"] = t_shift
+    if layer_penalty_factor is not None: kwargs["layer_penalty_factor"] = layer_penalty_factor
+    if position_temperature is not None: kwargs["position_temperature"] = position_temperature
+    if class_temperature is not None: kwargs["class_temperature"] = class_temperature
+
     audios = model.generate(
         text=text, language=language, ref_audio=ref_audio_path,
         ref_text=ref_text, instruct=instruct, duration=duration,
         num_step=num_step, guidance_scale=guidance_scale, speed=speed,
-        t_shift=t_shift, denoise=denoise, postprocess_output=postprocess_output,
-        layer_penalty_factor=layer_penalty_factor,
-        position_temperature=position_temperature,
-        class_temperature=class_temperature,
+        denoise=denoise, postprocess_output=postprocess_output,
+        **kwargs
     )
     return audios[0]  # shape (1, T)
 
@@ -783,12 +790,12 @@ async def generate_speech(
     num_step: int = Form(16),
     guidance_scale: float = Form(2.0),
     speed: float = Form(1.0),
-    t_shift: float = Form(0.1),
+    t_shift: Optional[float] = Form(None),
     denoise: bool = Form(True),
     postprocess_output: bool = Form(True),
-    layer_penalty_factor: float = Form(5.0),
-    position_temperature: float = Form(5.0),
-    class_temperature: float = Form(0.0),
+    layer_penalty_factor: Optional[float] = Form(None),
+    position_temperature: Optional[float] = Form(None),
+    class_temperature: Optional[float] = Form(None),
     profile_id: Optional[str] = Form(None),
     seed: Optional[int] = Form(None),
 ):
@@ -816,18 +823,26 @@ async def generate_speech(
                 # Use the profile's saved seed for maximum determinism
                 if used_seed is None and row["seed"] is not None:
                     used_seed = row["seed"]
-            elif row["ref_audio_path"]:
-                ref_audio_path = os.path.join(VOICES_DIR, row["ref_audio_path"])
-                if not ref_text:
-                    ref_text = row["ref_text"]
+            elif row["instruct"] and not row["is_locked"]:
+                # UNLOCKED Design voice (personality):
+                # DO NOT pass ref_audio/ref_text (the test words from creation),
+                # because short dub segments cause F5-TTS to leak the test words into output.
+                # Instead, we just pass the personality instruct and the seed (if any)
                 if not instruct:
                     instruct = row["instruct"]
+                if used_seed is None and row["seed"] is not None:
+                    used_seed = row["seed"]
             else:
-                # Design profile without lock — just use instruct
-                if not instruct:
+                # Pure Clone voice (no instruct)
+                ref_audio_path = os.path.join(VOICES_DIR, row["ref_audio_path"]) if row["ref_audio_path"] else None
+                if not ref_text and row["ref_text"]:
+                    ref_text = row["ref_text"]
+                if not instruct and row["instruct"]:
                     instruct = row["instruct"]
-            if not language or language == "Auto":
-                language = row["language"] if row["language"] != "Auto" else None
+                if used_seed is None and row["seed"] is not None:
+                    used_seed = row["seed"]
+            if language == "Auto":
+                language = None
     elif ref_audio is not None:
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
@@ -837,10 +852,6 @@ async def generate_speech(
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    # Set deterministic seed if provided — makes Gumbel noise reproducible
-    if used_seed is not None:
-        torch.manual_seed(used_seed)
-
     start_time = time.time()
     try:
         loop = asyncio.get_event_loop()
@@ -849,7 +860,7 @@ async def generate_speech(
             text, language, ref_audio_path, ref_text, instruct, duration,
             num_step, guidance_scale, speed, t_shift, denoise,
             postprocess_output, layer_penalty_factor, position_temperature,
-            class_temperature,
+            class_temperature, used_seed,
         )
         gen_time = round(time.time() - start_time, 2)
 
