@@ -14,12 +14,65 @@ import {
 } from 'lucide-react';
 
 // Tauri: pre-import window API to avoid async delays in event handlers
+const isTauri = typeof window !== 'undefined' && !!(window.__TAURI_INTERNALS__ || window.__TAURI__);
 let tauriWindow = null;
-if (typeof window !== 'undefined' && window.__TAURI__) {
+if (isTauri) {
   import('@tauri-apps/api/window').then(m => { tauriWindow = m; });
 }
 const doubleClickMaximize = () => {
   if (tauriWindow) tauriWindow.getCurrentWindow().toggleMaximize();
+};
+
+/**
+ * Convert a File object to a media-safe URL.
+ * In Tauri's WebKit, blob: URLs fail for <video>/<audio> elements.
+ * We upload to the backend's /preview endpoint and serve via HTTP instead.
+ * Falls back to createObjectURL for regular browsers.
+ */
+const _PREVIEW_API = 'http://localhost:8000';
+const fileToMediaUrl = async (file, prevUrls) => {
+  // Revoke previous blob URLs if they exist
+  if (prevUrls?.videoUrl?.startsWith('blob:')) URL.revokeObjectURL(prevUrls.videoUrl);
+  if (prevUrls?.audioUrl?.startsWith('blob:')) URL.revokeObjectURL(prevUrls.audioUrl);
+  
+  if (isTauri) {
+    try {
+      const form = new FormData();
+      form.append('video', file, file.name || 'media.wav');
+      const res = await fetch(`${_PREVIEW_API}/preview/upload`, { method: 'POST', body: form });
+      const data = await res.json();
+      return {
+        videoUrl: `${_PREVIEW_API}${data.url}`,
+        audioUrl: data.audioUrl ? `${_PREVIEW_API}${data.audioUrl}` : `${_PREVIEW_API}${data.url}`
+      };
+    } catch (e) {
+      console.warn('Preview upload failed, falling back to blob URL:', e);
+    }
+  }
+  const url = URL.createObjectURL(file);
+  return { videoUrl: url, audioUrl: url };
+};
+
+/**
+ * Play audio from a Blob. Uses Web Audio API in Tauri (blob URLs blocked)
+ * and standard Audio() elsewhere.
+ */
+const playBlobAudio = async (blob) => {
+  if (isTauri) {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const buf = await blob.arrayBuffer();
+    const decoded = await ctx.decodeAudioData(buf);
+    const src = ctx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(ctx.destination);
+    src.start(0);
+    src.onended = () => ctx.close();
+  } else {
+    const url = URL.createObjectURL(blob);
+    const a = new Audio(url);
+    a.play().catch(() => {});
+    a.onended = () => URL.revokeObjectURL(url);
+  }
 };
 
 const TAGS = [
@@ -237,6 +290,8 @@ function App() {
   const [sysStats, setSysStats] = useState(null);
 
   useEffect(() => {
+    let interval = null;
+    let cancelled = false;
     const fetchStats = async () => {
       try {
         const [sysRes, modelRes] = await Promise.all([
@@ -248,11 +303,22 @@ function App() {
           const ms = await modelRes.json();
           setModelStatus(ms.status);
         }
-      } catch (e) {}
+        return true; // success
+      } catch (e) { return false; }
     };
-    fetchStats();
-    const interval = setInterval(fetchStats, 2000);
-    return () => clearInterval(interval);
+    // Wait for backend to be reachable before starting the polling interval
+    const startPolling = async () => {
+      while (!cancelled) {
+        const ok = await fetchStats();
+        if (ok) {
+          if (!cancelled) interval = setInterval(fetchStats, 2000);
+          return;
+        }
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    };
+    startPolling();
+    return () => { cancelled = true; if (interval) clearInterval(interval); };
   }, []);
 
   const loadProfiles = useCallback(async () => {
@@ -284,10 +350,26 @@ function App() {
   }, []);
 
   useEffect(() => {
-    loadProfiles();
-    loadHistory();
-    loadDubHistory();
-    loadProjects();
+    // Wait for backend to come alive before loading data (handles Tauri startup race)
+    let cancelled = false;
+    const loadAll = async () => {
+      // Retry until backend responds (exponential backoff: 1s, 2s, 4s max)
+      let delay = 1000;
+      while (!cancelled) {
+        try {
+          const res = await fetch(`${API}/model/status`);
+          if (res.ok) break; // backend is alive
+        } catch (e) { /* not ready yet */ }
+        await new Promise(r => setTimeout(r, delay));
+        delay = Math.min(delay * 2, 4000);
+      }
+      if (cancelled) return;
+      loadProfiles();
+      loadHistory();
+      loadDubHistory();
+      loadProjects();
+    };
+    loadAll();
     // Restore local UI state
     try {
       const saved = JSON.parse(localStorage.getItem('omni_ui') || '{}');
@@ -309,6 +391,7 @@ function App() {
       if (saved.dubStep) setDubStep(saved.dubStep);
       if (saved.dubTranscript) setDubTranscript(saved.dubTranscript);
     } catch (e) {}
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -436,16 +519,12 @@ function App() {
         }
       }
       
-      // Construct final blob and create instant playback URL
+      // Construct final blob and auto-play
       const blob = new Blob(chunks, { type: 'audio/wav' });
-      const audioUrl = URL.createObjectURL(blob);
       
       // Auto-play the streamed result immediately
       try {
-        const audio = new Audio(audioUrl);
-        audio.play().catch(() => {});
-        // Cleanup after playback
-        audio.onended = () => URL.revokeObjectURL(audioUrl);
+        await playBlobAudio(blob);
       } catch (e) {}
 
       // Refresh history from server and explicitly switch to history tab automatically so user can see it
@@ -526,9 +605,8 @@ function App() {
       const res = await fetch(`${API}/generate`, { method: "POST", body: formData });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
-      const a = new Audio(URL.createObjectURL(blob));
       toast.success('Preview ready!', { id: toastId });
-      a.play().catch(() => toast.error('Playback failed', { id: toastId }));
+      playBlobAudio(blob).catch(() => toast.error('Playback failed', { id: toastId }));
       
       await loadHistory();
     } catch (err) {
@@ -572,9 +650,8 @@ function App() {
       const res = await fetch(`${API}/generate`, { method: "POST", body: formData });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
-      const a = new Audio(URL.createObjectURL(blob));
       toast.success('Preview ready!', { id: toastId });
-      a.play().catch(() => toast.error('Playback failed', { id: toastId }));
+      playBlobAudio(blob).catch(() => toast.error('Playback failed', { id: toastId }));
     } catch (err) {
       toast.error('Preview failed: ' + err.message, { id: toastId });
     } finally {
@@ -851,7 +928,7 @@ function App() {
     setDubDuration(0); setDubError(''); setDubVideoFile(null); setDubTracks([]);
     setDubProgress({ current: 0, total: 0, text: '' }); setDubTranscript(''); setShowTranscript(false);
     setPreviewAudios({});
-    setDubLocalBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setDubLocalBlobUrl(prev => { if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev); return null; });
     setActiveProjectId(null); setActiveProjectName('');
   };
 
@@ -987,7 +1064,7 @@ function App() {
   const filteredDubLangs = dubLangSearch ? ALL_LANGUAGES.filter(l => l.toLowerCase().includes(dubLangSearch.toLowerCase())) : ALL_LANGUAGES;
 
   return (
-    <div className="app-container" style={{ zoom: uiScale, gridTemplateColumns: isSidebarCollapsed ? '0px 1fr' : undefined }}>
+    <div className={`app-container${isSidebarCollapsed ? ' sidebar-collapsed' : ''}`} style={{ zoom: uiScale }}>
       <Toaster position="top-center" toastOptions={{
         style: { background: 'rgba(40,40,40,0.9)', backdropFilter: 'blur(10px)', color: '#ebdbb2', border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.72rem', padding: '4px 8px' },
         error: { iconTheme: { primary: '#fb4934', secondary: '#fff' } },
@@ -996,14 +1073,6 @@ function App() {
       <div className="header-area" data-tauri-drag-region onDoubleClick={doubleClickMaximize} style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', gridColumn: '1 / -1', gridRow: '1', cursor: 'default'}}>
         {/* Left cluster: logo + tabs */}
         <div style={{display:'flex', alignItems:'center', gap:'12px', minWidth:0}}>
-          <button 
-             onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-             style={{display:'flex', alignItems:'center', justifyContent:'center', padding:'4px', background: isSidebarCollapsed ? 'rgba(211,134,155,0.1)' : 'rgba(255,255,255,0.05)', border:`1px solid ${isSidebarCollapsed ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.08)'}`, color: isSidebarCollapsed ? '#d3869b' : '#a89984', borderRadius:4, cursor:'pointer'}}
-             title="Toggle Sidebar"
-          >
-             {isSidebarCollapsed ? <PanelLeftOpen size={14}/> : <PanelLeftClose size={14}/>}
-          </button>
-
           <div style={{display:'flex', alignItems:'center', gap:'6px', flexShrink:0}}>
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d3869b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" opacity="0.15" fill="#d3869b"/>
@@ -1059,113 +1128,175 @@ function App() {
 
         {/* ═══ LAUNCHPAD TAB ═══ */}
         {mode === 'launchpad' ? (
-          <div className="glass-panel" style={{flex:1, display:'flex', flexDirection:'column', overflowY:'auto'}}>
-            <div style={{padding:'20px 30px', borderBottom:'1px solid rgba(255,255,255,0.08)'}}>
+          <div className="launchpad">
+            {/* Hero */}
+            <div className="lp-hero">
               <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
                 <div>
-                  <h2 style={{margin:0, fontSize:'1.4rem', display:'flex', alignItems:'center', gap:'10px'}}><Globe color="#ebdbb2"/> Unified Workspace</h2>
-                  <p style={{margin:'4px 0 0 0', color:'#a89984', fontSize:'0.85rem'}}>Select a cloned voice, design preset, or dubbing project to load into the studio.</p>
+                  <div style={{display:'flex', alignItems:'center', gap:'10px', marginBottom:'6px'}}>
+                    {/* Animated waveform decoration */}
+                    <div style={{display:'flex', alignItems:'center', gap:'2px', height:'24px'}}>
+                      {[14,20,10,24,16,22,12,18].map((h,i) => (
+                        <span key={i} className="lp-wave-bar" style={{
+                          height: h, background: `linear-gradient(to top, #d3869b, #fabd2f)`,
+                          animationDelay: `${i * 0.15}s`, opacity: 0.6 + (i % 3) * 0.15
+                        }}/>
+                      ))}
+                    </div>
+                    <span style={{fontSize:'0.6rem', fontWeight:600, letterSpacing:'0.12em', textTransform:'uppercase', color:'#665c54'}}>Studio</span>
+                  </div>
+                  <h1>OmniVoice Studio</h1>
+                  <p>Clone any voice. Design new ones. Dub video in 646 languages.</p>
                 </div>
-                <button className="btn-primary" onClick={() => setIsCompareModalOpen(true)} style={{display:'flex', alignItems:'center', gap:6, padding:'6px 14px', fontSize:'0.85rem', width:'auto', marginTop:0}}>
-                  <Scale size={16}/> A/B Voice Comparison
+                <button className="btn-primary" onClick={() => setIsCompareModalOpen(true)} style={{display:'flex', alignItems:'center', gap:6, padding:'8px 16px', fontSize:'0.75rem', width:'auto', marginTop:8, borderRadius:8, flexShrink:0}}>
+                  <Scale size={14}/> A/B Compare
                 </button>
               </div>
-              
-              {/* Quick Start Guide */}
-              <div style={{marginTop:'20px', padding:'15px', background:'rgba(255,255,255,0.02)', borderRadius:'8px', border:'1px solid rgba(255,255,255,0.05)'}}>
-                <h3 style={{fontSize:'0.9rem', color:'#ebdbb2', margin:'0 0 12px 0', display:'flex', alignItems:'center', gap:6}}><Target size={14}/> OmniVoice Workflow Guide</h3>
-                <div style={{display:'flex', gap:'15px'}}>
-                  {/* Step 1 */}
-                  <div style={{flex:1, opacity: profiles.length > 0 ? 1 : 0.6}}>
-                    <div style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'6px'}}>
-                      {profiles.length > 0 ? <CheckCircle size={14} color="#b8bb26"/> : <Circle size={14} color="#a89984"/>}
-                      <span style={{fontSize:'0.8rem', fontWeight:600, color: profiles.length > 0 ? '#b8bb26' : '#ebdbb2'}}>1. Create a Voice</span>
-                    </div>
-                    <p style={{margin:0, fontSize:'0.7rem', color:'#a89984'}}>Clone a voice from audio or design a new one.</p>
+
+              {/* Progress Steps */}
+              <div style={{display:'flex', alignItems:'center', gap:0, marginTop:'24px'}}>
+                <div className={`lp-step ${profiles.length > 0 ? 'completed' : ''}`}>
+                  <div className="lp-step-num">{profiles.length > 0 ? <Check size={11}/> : '1'}</div>
+                  <div>
+                    <div style={{fontSize:'0.68rem', fontWeight:600, color: profiles.length > 0 ? '#b8bb26' : '#a89984'}}>Create Voice</div>
+                    <div style={{fontSize:'0.55rem', color:'#504945'}}>Clone or design</div>
                   </div>
-                  <ChevronRight size={16} color="#504945" style={{alignSelf:'center'}}/>
-                  {/* Step 2 */}
-                  <div style={{flex:1, opacity: studioProjects.length > 0 ? 1 : 0.6}}>
-                    <div style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'6px'}}>
-                      {studioProjects.length > 0 ? <CheckCircle size={14} color="#b8bb26"/> : <Circle size={14} color="#a89984"/>}
-                      <span style={{fontSize:'0.8rem', fontWeight:600, color: studioProjects.length > 0 ? '#b8bb26' : '#ebdbb2'}}>2. Upload Video</span>
-                    </div>
-                    <p style={{margin:0, fontSize:'0.7rem', color:'#a89984'}}>Go to 'Dub', upload a video, and transcribe it.</p>
+                </div>
+                <div className="lp-step-connector"/>
+                <div className={`lp-step ${studioProjects.length > 0 ? 'completed' : ''}`}>
+                  <div className="lp-step-num">{studioProjects.length > 0 ? <Check size={11}/> : '2'}</div>
+                  <div>
+                    <div style={{fontSize:'0.68rem', fontWeight:600, color: studioProjects.length > 0 ? '#b8bb26' : '#a89984'}}>Upload Video</div>
+                    <div style={{fontSize:'0.55rem', color:'#504945'}}>Transcribe audio</div>
                   </div>
-                  <ChevronRight size={16} color="#504945" style={{alignSelf:'center'}}/>
-                  {/* Step 3 */}
-                  <div style={{flex:1, opacity: dubHistory.length > 0 ? 1 : 0.6}}>
-                    <div style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'6px'}}>
-                      {dubHistory.length > 0 ? <CheckCircle size={14} color="#b8bb26"/> : <Circle size={14} color="#a89984"/>}
-                      <span style={{fontSize:'0.8rem', fontWeight:600, color: dubHistory.length > 0 ? '#b8bb26' : '#ebdbb2'}}>3. Generate Dub</span>
-                    </div>
-                    <p style={{margin:0, fontSize:'0.7rem', color:'#a89984'}}>Assign voices, translate, and download the video.</p>
+                </div>
+                <div className="lp-step-connector"/>
+                <div className={`lp-step ${dubHistory.length > 0 ? 'completed' : ''}`}>
+                  <div className="lp-step-num">{dubHistory.length > 0 ? <Check size={11}/> : '3'}</div>
+                  <div>
+                    <div style={{fontSize:'0.68rem', fontWeight:600, color: dubHistory.length > 0 ? '#b8bb26' : '#a89984'}}>Generate Dub</div>
+                    <div style={{fontSize:'0.55rem', color:'#504945'}}>Export dubbed video</div>
                   </div>
                 </div>
               </div>
             </div>
-            
-            <div style={{flex:1, padding:'30px', display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(300px, 1fr))', gap:'30px'}}>
-              {/* Clone Voices */}
-              <div>
-                <h3 style={{fontSize:'1rem', color:'#d3869b', marginBottom:'16px', display:'flex', alignItems:'center', gap:'8px'}}><Fingerprint size={16}/> Cloned Voices ({profiles.filter(p => !p.instruct).length})</h3>
-                <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
-                  {profiles.filter(p => !p.instruct).length === 0 ? <p style={{fontSize:'0.85rem', color:'#665c54'}}>No models.</p> : profiles.filter(p => !p.instruct).map(p => (
-                    <div key={p.id} className="history-item" style={{margin:0, borderLeft:'3px solid #d3869b', padding:'12px'}}>
-                      <div style={{fontSize:'0.9rem', fontWeight:600}}>{p.name}</div>
-                      <div style={{fontSize:'0.7rem', color:'#a89984', marginTop:'4px'}}>{p.ref_audio_path}</div>
-                      <div style={{display:'flex', gap:'8px', marginTop:'10px'}}>
-                        <button onClick={() => { setMode('clone'); handleSelectProfile(p); }} style={{fontSize:'0.75rem', padding:'4px 12px', borderRadius:'4px', background:'rgba(255,255,255,0.05)', color:'#ebdbb2', border:'1px solid rgba(255,255,255,0.1)', cursor:'pointer'}}>Open inside Clone</button>
-                      </div>
-                    </div>
-                  ))}
+
+            {/* Action Cards */}
+            <div className="lp-actions">
+              <div className="lp-action-card lp-animate" onClick={() => setMode('clone')}
+                style={{'--card-accent':'rgba(211,134,155,0.1)', '--card-border':'rgba(211,134,155,0.25)'}}>
+                {profiles.filter(p => !p.instruct).length > 0 && <span className="card-count" style={{background:'rgba(211,134,155,0.12)', color:'#d3869b'}}>{profiles.filter(p => !p.instruct).length}</span>}
+                <div className="card-icon" style={{background:'rgba(211,134,155,0.1)'}}>
+                  <Fingerprint size={18} color="#d3869b"/>
                 </div>
+                <h3>Voice Clone</h3>
+                <p className="card-desc">Upload a reference audio and clone any voice with a single sample. Instant identity capture.</p>
               </div>
 
-              {/* Designed Voices */}
-              <div>
-                <h3 style={{fontSize:'1rem', color:'#8ec07c', marginBottom:'16px', display:'flex', alignItems:'center', gap:'8px'}}><Wand2 size={16}/> Designed Voices ({profiles.filter(p => !!p.instruct).length})</h3>
-                <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
-                  {profiles.filter(p => !!p.instruct).length === 0 ? <p style={{fontSize:'0.85rem', color:'#665c54'}}>No models.</p> : profiles.filter(p => !!p.instruct).map(p => (
-                    <div key={p.id} className="history-item" style={{margin:0, borderLeft: `3px solid ${p.is_locked ? '#b8bb26' : '#8ec07c'}`, padding:'12px'}}>
-                      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                        <div style={{fontSize:'0.9rem', fontWeight:600}}>{p.name}</div>
-                        {p.is_locked ? (
-                          <span style={{fontSize:'0.6rem', padding:'1px 6px', borderRadius:4, background:'rgba(184,187,38,0.2)', color:'#b8bb26', display:'flex', alignItems:'center', gap:3}}><Lock size={9}/> LOCKED</span>
-                        ) : (
-                          <span style={{fontSize:'0.6rem', padding:'1px 6px', borderRadius:4, background:'rgba(142,192,124,0.15)', color:'#8ec07c'}}>DESIGN</span>
-                        )}
-                      </div>
-                      <div style={{fontSize:'0.7rem', color:'#a89984', fontStyle:'italic', marginTop:'4px'}}>{p.instruct}</div>
-                      <div style={{display:'flex', gap:'8px', marginTop:'10px'}}>
-                        <button onClick={() => { setMode('design'); handleSelectProfile(p); }} style={{fontSize:'0.75rem', padding:'4px 12px', borderRadius:'4px', background:'rgba(255,255,255,0.05)', color:'#ebdbb2', border:'1px solid rgba(255,255,255,0.1)', cursor:'pointer'}}>Open inside Design</button>
-                        {p.is_locked && (
-                          <button onClick={() => handleUnlockProfile(p.id)} style={{fontSize:'0.75rem', padding:'4px 12px', borderRadius:'4px', background:'rgba(184,187,38,0.1)', border:'1px solid rgba(184,187,38,0.2)', color:'#b8bb26', cursor:'pointer', display:'flex', alignItems:'center', gap:4}}>
-                            <Unlock size={11}/> Unlock
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+              <div className="lp-action-card lp-animate" onClick={() => setMode('design')}
+                style={{'--card-accent':'rgba(142,192,124,0.1)', '--card-border':'rgba(142,192,124,0.25)'}}>
+                {profiles.filter(p => !!p.instruct).length > 0 && <span className="card-count" style={{background:'rgba(142,192,124,0.12)', color:'#8ec07c'}}>{profiles.filter(p => !!p.instruct).length}</span>}
+                <div className="card-icon" style={{background:'rgba(142,192,124,0.1)'}}>
+                  <Wand2 size={18} color="#8ec07c"/>
                 </div>
+                <h3>Voice Design</h3>
+                <p className="card-desc">Craft entirely new voices from text instructions. Control gender, age, accent, and emotion.</p>
               </div>
 
-              {/* Studio Projects */}
-              <div>
-                <h3 style={{fontSize:'1rem', color:'#fe8019', marginBottom:'16px', display:'flex', alignItems:'center', gap:'8px'}}><Film size={16}/> Dubbing Projects ({studioProjects.length})</h3>
-                <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
-                  {studioProjects.length === 0 ? <p style={{fontSize:'0.85rem', color:'#665c54'}}>No projects.</p> : studioProjects.map(proj => (
-                    <div key={proj.id} className="history-item" style={{margin:0, borderLeft:'3px solid #fe8019', padding:'12px'}}>
-                      <div style={{fontSize:'0.9rem', fontWeight:600}}>{proj.name}</div>
-                      <div style={{fontSize:'0.7rem', color:'#a89984', marginTop:'4px'}}>{proj.video_path || "Audio Only"}</div>
-                      <div style={{display:'flex', gap:'8px', marginTop:'10px'}}>
-                        <button onClick={() => { setMode('dub'); loadProject(proj.id); }} style={{fontSize:'0.75rem', padding:'4px 12px', borderRadius:'4px', background:'rgba(255,255,255,0.05)', color:'#ebdbb2', border:'1px solid rgba(255,255,255,0.1)', cursor:'pointer'}}>Open inside Studio</button>
-                      </div>
-                    </div>
-                  ))}
+              <div className="lp-action-card lp-animate" onClick={() => setMode('dub')}
+                style={{'--card-accent':'rgba(254,128,25,0.1)', '--card-border':'rgba(254,128,25,0.25)'}}>
+                {studioProjects.length > 0 && <span className="card-count" style={{background:'rgba(254,128,25,0.12)', color:'#fe8019'}}>{studioProjects.length}</span>}
+                <div className="card-icon" style={{background:'rgba(254,128,25,0.1)'}}>
+                  <Film size={18} color="#fe8019"/>
                 </div>
+                <h3>Video Dubbing</h3>
+                <p className="card-desc">Transcribe, translate, and re-voice any video with speaker-level control and timeline editing.</p>
               </div>
             </div>
+
+            {/* Recent Projects */}
+            {(profiles.length > 0 || studioProjects.length > 0) && (
+              <div className="lp-section">
+                <div style={{display:'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px'}}>
+                  
+                  {/* Cloned voices */}
+                  {profiles.filter(p => !p.instruct).length > 0 && (
+                    <div>
+                      <div className="lp-section-title"><Fingerprint size={12} color="#d3869b"/> Cloned Voices</div>
+                      <div style={{display:'flex', flexDirection:'column', gap:'8px'}}>
+                        {profiles.filter(p => !p.instruct).map(p => (
+                          <div key={p.id} className="lp-project-card">
+                            <div className="proj-icon" style={{background:'rgba(211,134,155,0.1)'}}><Fingerprint size={14} color="#d3869b"/></div>
+                            <div className="proj-info">
+                              <div className="proj-name">{p.name}</div>
+                              <div className="proj-meta">{p.ref_audio_path}</div>
+                            </div>
+                            <button className="proj-action" onClick={() => { setMode('clone'); handleSelectProfile(p); }}>Open</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Designed voices */}
+                  {profiles.filter(p => !!p.instruct).length > 0 && (
+                    <div>
+                      <div className="lp-section-title"><Wand2 size={12} color="#8ec07c"/> Designed Voices</div>
+                      <div style={{display:'flex', flexDirection:'column', gap:'8px'}}>
+                        {profiles.filter(p => !!p.instruct).map(p => (
+                          <div key={p.id} className="lp-project-card">
+                            <div className="proj-icon" style={{background: p.is_locked ? 'rgba(184,187,38,0.1)' : 'rgba(142,192,124,0.1)'}}>
+                              {p.is_locked ? <Lock size={14} color="#b8bb26"/> : <Wand2 size={14} color="#8ec07c"/>}
+                            </div>
+                            <div className="proj-info">
+                              <div className="proj-name">{p.name}</div>
+                              <div className="proj-meta" style={{fontStyle:'italic'}}>{p.instruct}</div>
+                            </div>
+                            {p.is_locked && <span style={{fontSize:'0.5rem', padding:'1px 6px', borderRadius:4, background:'rgba(184,187,38,0.12)', color:'#b8bb26', fontWeight:600}}>LOCKED</span>}
+                            <button className="proj-action" onClick={() => { setMode('design'); handleSelectProfile(p); }}>Open</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Dubbing projects */}
+                  {studioProjects.length > 0 && (
+                    <div>
+                      <div className="lp-section-title"><Film size={12} color="#fe8019"/> Dubbing Projects</div>
+                      <div style={{display:'flex', flexDirection:'column', gap:'8px'}}>
+                        {studioProjects.map(proj => (
+                          <div key={proj.id} className="lp-project-card">
+                            <div className="proj-icon" style={{background:'rgba(254,128,25,0.1)'}}><Film size={14} color="#fe8019"/></div>
+                            <div className="proj-info">
+                              <div className="proj-name">{proj.name}</div>
+                              <div className="proj-meta">{proj.video_path || "Audio Only"}</div>
+                            </div>
+                            <button className="proj-action" onClick={() => { setMode('dub'); loadProject(proj.id); }}>Open</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {profiles.length === 0 && studioProjects.length === 0 && (
+              <div style={{flex:1, display:'flex', alignItems:'center', justifyContent:'center', position:'relative', zIndex:1}}>
+                <div style={{textAlign:'center', maxWidth:360}}>
+                  <div style={{display:'flex', justifyContent:'center', gap:'3px', marginBottom:'16px', opacity:0.3}}>
+                    {[8,14,22,18,26,14,20,10,16].map((h,i) => (
+                      <span key={i} className="lp-wave-bar" style={{
+                        height: h, background:'#665c54', animationDelay: `${i * 0.12}s`
+                      }}/>
+                    ))}
+                  </div>
+                  <p style={{fontSize:'0.8rem', color:'#504945', margin:0}}>No projects yet. Click a card above to get started.</p>
+                </div>
+              </div>
+            )}
           </div>
         ) : mode === 'dub' ? (
           <div style={{flex:1, display:'flex', flexDirection:'column', minHeight:0}}>
@@ -1174,7 +1305,14 @@ function App() {
               <div style={{flex:1, display:'flex', flexDirection:'column', minHeight:0}}>
                 {/* Header bar (matches editing layout) */}
                 <div className="glass-panel" style={{padding:'4px 8px', display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0}}>
-                  <div className="label-row" style={{marginBottom:0}}>
+                  <div className="label-row" style={{marginBottom:0, alignItems: 'center'}}>
+                    <button 
+                      onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                      style={{display:'flex', alignItems:'center', justifyContent:'center', padding:'3px', marginRight:'6px', background: isSidebarCollapsed ? 'rgba(211,134,155,0.1)' : 'rgba(255,255,255,0.05)', border:`1px solid ${isSidebarCollapsed ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.08)'}`, color: isSidebarCollapsed ? '#d3869b' : '#a89984', borderRadius:4, cursor:'pointer'}}
+                      title="Toggle Sidebar"
+                    >
+                      {isSidebarCollapsed ? <PanelLeftOpen size={12}/> : <PanelLeftClose size={12}/>}
+                    </button>
                     <Film className="label-icon" size={11}/> <span style={{fontWeight:600}}>{dubVideoFile ? dubVideoFile.name : 'Video Dubbing Studio'}</span>
                     {dubVideoFile && <span style={{color:'#a89984', fontWeight:400}}> · {(dubVideoFile.size/1024/1024).toFixed(1)} MB</span>}
                     {activeProjectName && <span style={{color:'#b8bb26', marginLeft:6}}>— {activeProjectName}</span>}
@@ -1195,8 +1333,8 @@ function App() {
                     {dubVideoFile ? (
                       <>
                         <WaveformTimeline
-                          audioSrc={dubLocalBlobUrl}
-                          videoSrc={dubLocalBlobUrl}
+                          audioSrc={dubLocalBlobUrl?.audioUrl}
+                          videoSrc={dubLocalBlobUrl?.videoUrl}
                           segments={[]}
                           onSegmentsChange={() => {}}
                           disabled={true}
@@ -1265,7 +1403,7 @@ function App() {
                         if (file && file.type.startsWith('video/')) {
                           setDubVideoFile(file);
                           setDubStep('idle');
-                          setDubLocalBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
+                          fileToMediaUrl(file, null).then(urls => setDubLocalBlobUrl(urls));
                         }
                       }}>
                         <div style={{width:60, height:60, borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', background:'rgba(211,134,155,0.06)', border:'1px solid rgba(211,134,155,0.1)'}}>
@@ -1284,7 +1422,7 @@ function App() {
                         if (!file) return;
                         setDubVideoFile(file);
                         setDubStep('idle');
-                        setDubLocalBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
+                        setDubLocalBlobUrl(prev => { fileToMediaUrl(file, prev).then(urls => setDubLocalBlobUrl(urls)); return prev; });
                       }}/>
 
                     {/* Ghost cast row */}
@@ -1380,7 +1518,14 @@ function App() {
               <div style={{flex:1, display:'flex', flexDirection:'column', minHeight:0}}>
                 {/* Header bar */}
                 <div className="glass-panel" style={{padding:'4px 8px', display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0}}>
-                  <div className="label-row" style={{marginBottom:0}}>
+                  <div className="label-row" style={{marginBottom:0, alignItems: 'center'}}>
+                    <button 
+                      onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                      style={{display:'flex', alignItems:'center', justifyContent:'center', padding:'3px', marginRight:'6px', background: isSidebarCollapsed ? 'rgba(211,134,155,0.1)' : 'rgba(255,255,255,0.05)', border:`1px solid ${isSidebarCollapsed ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.08)'}`, color: isSidebarCollapsed ? '#d3869b' : '#a89984', borderRadius:4, cursor:'pointer'}}
+                      title="Toggle Sidebar"
+                    >
+                      {isSidebarCollapsed ? <PanelLeftOpen size={12}/> : <PanelLeftClose size={12}/>}
+                    </button>
                     <FileText className="label-icon" size={11}/> <span style={{fontWeight:600}}>{dubFilename}</span>
                     <span style={{color:'#a89984', fontWeight:400}}> · {formatTime(dubDuration)} · {dubSegments.length} segs</span>
                     {activeProjectName && <span style={{color:'#b8bb26', marginLeft:6}}>— {activeProjectName}</span>}
@@ -1691,7 +1836,16 @@ function App() {
           <div style={{flex:1, display:'flex', flexDirection:'column', minHeight:0}}>
             {/* ═══ CLONE / DESIGN ═══ */}
             <div className="glass-panel" style={{flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0}}>
-              <div className="label-row"><Command className="label-icon" size={14}/> Prompt</div>
+              <div className="label-row" style={{alignItems: 'center'}}>
+                <button 
+                  onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                  style={{display:'flex', alignItems:'center', justifyContent:'center', padding:'3px', marginRight:'6px', background: isSidebarCollapsed ? 'rgba(211,134,155,0.1)' : 'rgba(255,255,255,0.05)', border:`1px solid ${isSidebarCollapsed ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.08)'}`, color: isSidebarCollapsed ? '#d3869b' : '#a89984', borderRadius:4, cursor:'pointer'}}
+                  title="Toggle Sidebar"
+                >
+                  {isSidebarCollapsed ? <PanelLeftOpen size={12}/> : <PanelLeftClose size={12}/>}
+                </button>
+                <Command className="label-icon" size={14}/> Prompt
+              </div>
               {mode === 'design' && (
                 <div className="preset-grid">
                   {PRESETS.map(p => <button key={p.id} className="preset-btn" onClick={() => applyPreset(p)}>{p.name}</button>)}
@@ -1878,27 +2032,28 @@ function App() {
       </div>
 
       {/* ── SIDEBAR ── */}
-      {!isSidebarCollapsed && (
+      {
         <div className="glass-panel history-panel" style={{display:'flex', flexDirection:'column'}}>
           <div style={{display:'flex', gap:'4px', padding:'6px', borderBottom:'1px solid var(--glass-border)', background:'rgba(0,0,0,0.15)', flexShrink:0}}>
             <button onClick={() => setSidebarTab('projects')} style={{
-              flex:1, padding:'4px 0', fontSize:'0.72rem', fontWeight:600, cursor:'pointer', border:`1px solid ${sidebarTab === 'projects' ? 'rgba(184,187,38,0.3)' : 'transparent'}`,
+              flex:1, padding: isSidebarCollapsed ? '4px 0' : '4px 6px', fontSize:'0.72rem', fontWeight:600, cursor:'pointer', border:`1px solid ${sidebarTab === 'projects' ? 'rgba(184,187,38,0.3)' : 'transparent'}`,
               background: sidebarTab === 'projects' ? 'rgba(184,187,38,0.15)' : 'transparent',
               color: sidebarTab === 'projects' ? '#b8bb26' : '#a89984',
-              borderRadius:4, whiteSpace: 'nowrap', transition:'all 0.2s ease'
-            }}><FolderOpen size={12} style={{verticalAlign:'middle', marginRight:4}}/> 
-              Projects ({mode === 'dub' ? studioProjects.length : (mode === 'clone' ? profiles.filter(p => !p.instruct).length : profiles.filter(p => !!p.instruct).length)})
+              borderRadius:4, whiteSpace: 'nowrap', transition:'all 0.2s ease', overflow:'hidden'
+            }} title={isSidebarCollapsed ? `Projects (${mode === 'dub' ? studioProjects.length : (mode === 'clone' ? profiles.filter(p => !p.instruct).length : profiles.filter(p => !!p.instruct).length)})` : undefined}><FolderOpen size={12} style={{verticalAlign:'middle', marginRight: isSidebarCollapsed ? 0 : 4}}/> 
+              {!isSidebarCollapsed && `Projects (${mode === 'dub' ? studioProjects.length : (mode === 'clone' ? profiles.filter(p => !p.instruct).length : profiles.filter(p => !!p.instruct).length)})`}
             </button>
             <button onClick={() => setSidebarTab('history')} style={{
-              flex:1, padding:'4px 0', fontSize:'0.72rem', fontWeight:600, cursor:'pointer', border:`1px solid ${sidebarTab === 'history' ? 'rgba(211,134,155,0.3)' : 'transparent'}`,
+              flex:1, padding: isSidebarCollapsed ? '4px 0' : '4px 6px', fontSize:'0.72rem', fontWeight:600, cursor:'pointer', border:`1px solid ${sidebarTab === 'history' ? 'rgba(211,134,155,0.3)' : 'transparent'}`,
               background: sidebarTab === 'history' ? 'rgba(211,134,155,0.15)' : 'transparent',
               color: sidebarTab === 'history' ? '#d3869b' : '#a89984',
-              borderRadius:4, whiteSpace: 'nowrap', transition:'all 0.2s ease'
-            }}><History size={12} style={{verticalAlign:'middle', marginRight:4}}/> 
-              History ({history.length + dubHistory.length})
+              borderRadius:4, whiteSpace: 'nowrap', transition:'all 0.2s ease', overflow:'hidden'
+            }} title={isSidebarCollapsed ? `History (${history.length + dubHistory.length})` : undefined}><History size={12} style={{verticalAlign:'middle', marginRight: isSidebarCollapsed ? 0 : 4}}/> 
+              {!isSidebarCollapsed && `History (${history.length + dubHistory.length})`}
             </button>
           </div>
 
+        <div style={{flex:1, overflowY:'auto', padding:'8px', display: isSidebarCollapsed ? 'none' : 'block'}}>
         {/* ── PROJECTS TAB ── */}
         {sidebarTab === 'projects' && (
           <>
@@ -2102,14 +2257,17 @@ function App() {
             
             {(history.length + dubHistory.length) > 0 && (
               <button onClick={async () => { if (!confirm(`Clear all ${history.length + dubHistory.length} history items? This cannot be undone.`)) return; await fetch(`${API}/history`, {method:'DELETE'}); await fetch(`${API}/dub/history`, {method:'DELETE'}); await loadHistory(); await loadDubHistory(); toast.success('History cleared'); }}
-                style={{width:'100%', marginTop:10, padding:5, background:'rgba(251,73,52,0.1)', border:'1px solid rgba(251,73,52,0.3)', borderRadius:6, color:'#fb4934', cursor:'pointer', fontSize:'0.75rem'}}>
-                Clear History
+                style={{width:'100%', marginTop:10, padding:5, background:'transparent', border:'1px solid rgba(255,255,255,0.06)', borderRadius:6, color:'#665c54', cursor:'pointer', fontSize:'0.65rem', transition:'all 0.2s ease'}}
+                onMouseEnter={e => { e.target.style.borderColor = 'rgba(251,73,52,0.3)'; e.target.style.color = '#fb4934'; }}
+                onMouseLeave={e => { e.target.style.borderColor = 'rgba(255,255,255,0.06)'; e.target.style.color = '#665c54'; }}>
+                <Trash2 size={10} style={{verticalAlign:'middle', marginRight:4}}/> Clear History
               </button>
             )}
           </>
         )}
+        </div>
       </div>
-      )}
+      }
 
       {/* ═══ A/B VOICE COMPARISON MODAL ═══ */}
       {isCompareModalOpen && (
@@ -2208,7 +2366,9 @@ function App() {
                     
                     const res = await fetch(`${API}/generate`, { method: "POST", body: formData });
                     if (!res.ok) throw new Error(await res.text());
-                    return URL.createObjectURL(await res.blob());
+                    const blob = await res.blob();
+                    const urls = await fileToMediaUrl(blob, null);
+                    return urls.audioUrl;
                   };
               
                   try {

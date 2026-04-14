@@ -82,6 +82,7 @@ export default function WaveformTimeline({
     if (!videoEl) {
       mediaEl.src = audioSrc;
     }
+    mediaEl.crossOrigin = 'anonymous'; // helps in sandboxed WebViews
 
     // ── 3. Init WaveSurfer with that single media element ────────────────────
     const regions = RegionsPlugin.create();
@@ -104,11 +105,45 @@ export default function WaveformTimeline({
     });
 
     ws.on('ready',      ()  => { setDuration(ws.getDuration()); setReady(true); });
-    ws.on('error',      ()  => setLoadError(true));
     ws.on('timeupdate', (t) => setCurrentTime(t));
     ws.on('play',       ()  => setIsPlaying(true));
     ws.on('pause',      ()  => setIsPlaying(false));
     ws.on('finish',     ()  => setIsPlaying(false));
+
+    // Handle errors (like Safari refusing to decode .mov in WebAudio)
+    ws.on('error', (err) => {
+      const errStr = typeof err === 'string' ? err.toLowerCase() : (err?.message || '').toLowerCase();
+      if ((err?.name === 'AbortError') || errStr.includes('abort')) {
+        return; // Ignore React cleanup aborts
+      }
+
+      // If WaveSurfer failed to decode the `<video>` stream (e.g. .mov container on MacOS),
+      // we manually fetch the companion `audioSrc` (.wav), decode it, and supply raw peaks.
+      if (audioSrc && audioSrc !== videoSrc) {
+        fetch(audioSrc)
+          .then(res => res.arrayBuffer())
+          .then(buffer => {
+            const actx = new (window.AudioContext || window.webkitAudioContext)();
+            return actx.decodeAudioData(buffer);
+          })
+          .then(audioBuffer => {
+             const channelData = audioBuffer.getChannelData(0);
+             // Load the peaks without mutating the `<video>` element's src!
+             ws.load(undefined, [channelData], audioBuffer.duration);
+          })
+          .catch((decodeErr) => {
+            console.error('Audio decode fallback failed:', decodeErr);
+            setLoadError(true);
+          });
+      } else if (audioSrc && audioSrc.startsWith('blob:')) {
+        fetch(audioSrc)
+          .then(r => r.blob())
+          .then(blob => ws.loadBlob(blob))
+          .catch(() => setLoadError(true));
+      } else {
+        setLoadError(true);
+      }
+    });
 
     regions.on('region-updated', (region) => {
       const segId = parseInt(region.id.replace('seg-', ''), 10);

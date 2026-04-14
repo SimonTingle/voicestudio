@@ -28,10 +28,17 @@ from omnivoice.models.omnivoice import OmniVoice
 logger = logging.getLogger("omnivoice.api")
 
 # ═══════════════════════════════════════════════════════════════════════
-# PATHS & GLOBALS
-# ═══════════════════════════════════════════════════════════════════════
+import platform
+import sys
+def get_app_data_dir():
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/OmniVoice")
+    elif sys.platform == "win32":
+        return os.path.join(os.environ.get("APPDATA", ""), "OmniVoice")
+    else:
+        return os.path.expanduser("~/.omnivoice")
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "omnivoice_data")
+DATA_DIR = get_app_data_dir()
 VOICES_DIR = os.path.join(DATA_DIR, "voices")       # Reference audio for profiles
 OUTPUTS_DIR = os.path.join(DATA_DIR, "outputs")      # Generated audio files
 DUB_DIR = os.path.join(DATA_DIR, "dub_jobs")
@@ -40,7 +47,7 @@ DB_PATH = os.path.join(DATA_DIR, "omnivoice.db")
 for d in [DATA_DIR, VOICES_DIR, OUTPUTS_DIR, DUB_DIR]:
     os.makedirs(d, exist_ok=True)
 
-import sys
+
 
 # Ensure ffmpeg is on PATH for Whisper and other subprocesses (mostly relevant for Mac/Linux)
 if sys.platform != "win32":
@@ -804,6 +811,57 @@ def _find_ffprobe():
     raise RuntimeError("ffprobe not found")
 
 
+# ── Preview file proxy (avoids blob: URLs which fail in Tauri's WebKit) ────────
+PREVIEW_DIR = os.path.join(DATA_DIR, "preview")
+os.makedirs(PREVIEW_DIR, exist_ok=True)
+
+@app.post("/preview/upload")
+async def preview_upload(video: UploadFile = File(...)):
+    """Save a video or audio to a temp location and return HTTP URLs for playback.
+       Automatically extracts an audio-only WAV to bypass WebKit MediaElement decoding bugs on macOS.
+    """
+    ext = os.path.splitext(video.filename or "video.mp4")[1].lower()
+    safe_name = f"{uuid.uuid4().hex[:12]}"
+    vid_path = os.path.join(PREVIEW_DIR, f"{safe_name}{ext}")
+    wav_path = os.path.join(PREVIEW_DIR, f"{safe_name}.wav")
+    
+    with open(vid_path, "wb") as f:
+        f.write(await video.read())
+        
+    has_audio = False
+    if ext not in [".wav", ".mp3", ".m4a", ".aac"]:
+        try:
+            ffmpeg_cmd = [
+                _find_ffmpeg(), "-y", "-i", vid_path,
+                "-vn", "-acodec", "pcm_s16le", "-ar", "22050", "-ac", "1",
+                wav_path
+            ]
+            subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            has_audio = True
+        except Exception as e:
+            logger.warning(f"FFmpeg extraction failed: {e}")
+            pass
+
+    return {
+        "url": f"/preview/{safe_name}{ext}",
+        "audioUrl": f"/preview/{safe_name}.wav" if has_audio else f"/preview/{safe_name}{ext}",
+        "filename": video.filename, "TESTING": "YES"
+    }
+
+@app.get("/preview/{filename}")
+async def preview_serve(filename: str):
+    path = os.path.join(PREVIEW_DIR, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Preview not found")
+    ext = os.path.splitext(filename)[1].lower()
+    media_types = {
+        ".mp4": "video/mp4", ".mov": "video/quicktime", 
+        ".mkv": "video/x-matroska", ".webm": "video/webm", 
+        ".avi": "video/x-msvideo", ".wav": "audio/wav", 
+        ".mp3": "audio/mpeg"
+    }
+    return FileResponse(path, media_type=media_types.get(ext, "application/octet-stream"))
+
 @app.post("/dub/upload")
 async def dub_upload(video: UploadFile = File(...)):
     job_id = str(uuid.uuid4())[:8]
@@ -893,11 +951,11 @@ async def dub_upload(video: UploadFile = File(...)):
         "audio_path": audio_path,
         "vocals_path": vocals_path,
         "no_vocals_path": no_vocals_path,
-        "duration": dur, "filename": video.filename,
+        "duration": dur, "filename": video.filename, "TESTING": "YES",
         "segments": None, "dubbed_tracks": {},
         "scene_cuts": scene_cuts,
     }
-    return {"job_id": job_id, "duration": round(dur, 2), "filename": video.filename}
+    return {"job_id": job_id, "duration": round(dur, 2), "filename": video.filename, "TESTING": "YES"}
 
 
 def _get_job(job_id: str):

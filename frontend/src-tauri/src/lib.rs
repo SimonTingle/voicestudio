@@ -1,9 +1,15 @@
-use std::process::Child;
+use std::net::TcpStream;
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::Manager;
 
 pub struct BackendState {
     pub process: Mutex<Option<Child>>,
+}
+
+/// Returns true if something is already listening on 127.0.0.1:port
+fn port_in_use(port: u16) -> bool {
+    TcpStream::connect(("127.0.0.1", port)).is_ok()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -18,14 +24,26 @@ pub fn run() {
                 )?;
             }
 
-            let child = std::process::Command::new("uv")
-                .args(["run", "uvicorn", "backend.main:app", "--port", "8000"])
-                .current_dir("../../")
-                .spawn()
-                .expect("Failed to spawn the Python ML backend");
+            // Only spawn if the backend isn't already running (e.g. manual `uv run`)
+            let skip_spawn = std::env::var("TAURI_SKIP_BACKEND").is_ok() || port_in_use(8000);
+            let child = if skip_spawn {
+                log::info!("Backend already running or skipped natively — skipping spawn");
+                None
+            } else {
+                log::info!("Spawning Python ML backend on :8000");
+                Some(
+                    Command::new("uv")
+                        .args(["run", "uvicorn", "backend.main:app", "--port", "8000"])
+                        .current_dir("../../")
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .expect("Failed to spawn the Python ML backend"),
+                )
+            };
 
             app.manage(BackendState {
-                process: Mutex::new(Some(child)),
+                process: Mutex::new(child),
             });
 
             Ok(())
@@ -35,7 +53,9 @@ pub fn run() {
                 if window.label() == "main" {
                     if let Ok(mut lock) = window.state::<BackendState>().process.lock() {
                         if let Some(mut child) = lock.take() {
+                            log::info!("Terminating Python ML backend (pid {})", child.id());
                             let _ = child.kill();
+                            let _ = child.wait(); // reap zombie
                         }
                     }
                 }

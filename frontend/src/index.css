@@ -79,6 +79,9 @@ h1, h2, h3, h4 { font-family: 'Outfit', sans-serif; margin: 0; }
   overflow: hidden;
   transition: grid-template-columns var(--transition-smooth);
 }
+.app-container.sidebar-collapsed {
+  grid-template-columns: 46px minmax(0, 4fr);
+}
 .app-container > .main-content {
   display: flex;
   flex-direction: column;
@@ -571,3 +574,157 @@ audio::-webkit-media-controls-time-remaining-display { color: #ebdbb2; font-size
   outline-offset: 1px;
 }
 button:focus:not(:focus-visible) { outline: none; }
+
+/* ═══ LAUNCHPAD PREMIUM ═══ */
+.launchpad {
+  flex: 1; display: flex; flex-direction: column; overflow-y: auto;
+  background: linear-gradient(165deg, rgba(29,32,33,0.95) 0%, rgba(40,40,40,0.9) 40%, rgba(29,32,33,0.98) 100%);
+  position: relative;
+}
+.launchpad::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 40% at 20% 30%, rgba(211,134,155,0.06) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 50% at 80% 70%, rgba(250,189,47,0.04) 0%, transparent 70%);
+}
+.lp-hero {
+  padding: 40px 40px 30px;
+  position: relative; z-index: 1;
+}
+.lp-hero h1 {
+  font-size: 1.6rem; font-weight: 800; margin: 0;
+  background: linear-gradient(135deg, #ebdbb2 0%, #d3869b 60%, #fabd2f 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.02em;
+  font-family: 'Outfit', sans-serif;
+}
+.lp-hero p {
+  margin: 6px 0 0; color: #a89984; font-size: 0.8rem; max-width: 500px; line-height: 1.5;
+  white-space: nowrap;
+}
+.lp-actions {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+  padding: 0 40px; position: relative; z-index: 1;
+}
+.lp-action-card {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px; padding: 20px;
+  cursor: pointer; transition: all 0.25s cubic-bezier(0.4,0,0.2,1);
+  position: relative; overflow: hidden;
+}
+.lp-action-card::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(135deg, var(--card-accent, rgba(211,134,155,0.08)) 0%, transparent 60%);
+  opacity: 0; transition: opacity 0.3s ease;
+}
+.lp-action-card:hover {
+  border-color: var(--card-border, rgba(211,134,155,0.2));
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3), 0 0 0 1px var(--card-border, rgba(211,134,155,0.15));
+}
+.lp-action-card:hover::before { opacity: 1; }
+.lp-action-card .card-icon {
+  width: 36px; height: 36px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 14px; position: relative; z-index: 1;
+}
+.lp-action-card h3 {
+  font-size: 0.85rem; font-weight: 700; margin: 0 0 4px; color: #ebdbb2;
+  position: relative; z-index: 1;
+}
+.lp-action-card .card-desc {
+  font-size: 0.68rem; color: #a89984; margin: 0; line-height: 1.4;
+  position: relative; z-index: 1;
+  min-height: 2.8em; /* keeps cards same height */
+}
+.lp-action-card .card-count {
+  font-size: 0.6rem; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+  position: absolute; top: 14px; right: 14px; z-index: 1;
+}
+.lp-section {
+  padding: 24px 40px; position: relative; z-index: 1;
+}
+.lp-section-title {
+  font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  color: #665c54; margin: 0 0 14px; display: flex; align-items: center; gap: 8px;
+}
+.lp-project-card {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px; padding: 14px 16px;
+  transition: all 0.2s ease;
+  display: flex; align-items: center; gap: 12px;
+}
+.lp-project-card:hover {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.1);
+}
+.lp-project-card .proj-icon {
+  width: 32px; height: 32px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.lp-project-card .proj-info { flex: 1; min-width: 0; }
+.lp-project-card .proj-name {
+  font-size: 0.78rem; font-weight: 600; color: #ebdbb2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lp-project-card .proj-meta {
+  font-size: 0.62rem; color: #665c54; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lp-project-card .proj-action {
+  font-size: 0.62rem; padding: 4px 10px; border-radius: 4px;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  color: #a89984; cursor: pointer; transition: all 0.15s ease; flex-shrink: 0;
+  white-space: nowrap;
+}
+.lp-project-card .proj-action:hover {
+  background: rgba(255,255,255,0.08); color: #ebdbb2;
+}
+
+/* Staggered fade-in */
+@keyframes lpFadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.lp-animate { animation: lpFadeUp 0.4s cubic-bezier(0.4,0,0.2,1) both; }
+.lp-animate:nth-child(1) { animation-delay: 0s; }
+.lp-animate:nth-child(2) { animation-delay: 0.06s; }
+.lp-animate:nth-child(3) { animation-delay: 0.12s; }
+
+/* Floating waveform decoration */
+@keyframes waveFloat {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  50% { transform: translateY(-3px) scaleY(1.08); }
+}
+.lp-wave-bar {
+  display: inline-block; width: 3px; border-radius: 2px;
+  animation: waveFloat 2s ease-in-out infinite;
+}
+
+/* Step progress */
+.lp-step {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-radius: 6px;
+  background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04);
+  transition: all 0.2s ease;
+}
+.lp-step.completed {
+  border-color: rgba(184,187,38,0.15); background: rgba(184,187,38,0.04);
+}
+.lp-step-num {
+  width: 22px; height: 22px; border-radius: 50%; font-size: 0.6rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  background: rgba(255,255,255,0.05); color: #665c54; border: 1px solid rgba(255,255,255,0.06);
+  transition: all 0.2s ease;
+}
+.lp-step.completed .lp-step-num {
+  background: rgba(184,187,38,0.15); color: #b8bb26; border-color: rgba(184,187,38,0.3);
+}
+.lp-step-connector {
+  width: 40px; height: 1px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.08), rgba(255,255,255,0.04));
+  flex-shrink: 0; margin: 0 4px;
+}

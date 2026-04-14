@@ -42,6 +42,7 @@ dependencies = [
     "soundfile",
     "psutil>=7.2.2",
     "pyannote-audio>=4.0.4",
+    "pyinstaller>=6.19.0",
 ]
 
 [project.optional-dependencies]
