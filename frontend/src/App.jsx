@@ -2,6 +2,20 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import './index.css';
 import WaveformTimeline from './components/WaveformTimeline';
 import SearchableSelect from './components/SearchableSelect';
+import AudioTrimmer from './components/AudioTrimmer';
+
+const CLONE_MAX_SECONDS = 15;
+
+async function probeAudioDuration(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const a = new Audio();
+    const done = (v) => { URL.revokeObjectURL(url); resolve(v); };
+    a.addEventListener('loadedmetadata', () => done(isFinite(a.duration) ? a.duration : null));
+    a.addEventListener('error', () => done(null));
+    a.src = url;
+  });
+}
 
 const POPULAR_LANGS = ['English','Spanish','French','German','Italian','Portuguese','Russian','Chinese','Japanese','Korean','Arabic','Hindi'];
 const POPULAR_ISO = ['en','es','fr','de','it','pt','ru','zh','ja','ko','ar','hi'];
@@ -189,6 +203,20 @@ function App() {
   const [mode, setMode] = useState('launchpad');
   const [text, setText] = useState('');
   const [refAudio, setRefAudio] = useState(null);
+  const [pendingTrimFile, setPendingTrimFile] = useState(null);
+
+  const ingestRefAudio = useCallback(async (file) => {
+    if (!file) { setRefAudio(null); return; }
+    const dur = await probeAudioDuration(file);
+    if (dur && dur > CLONE_MAX_SECONDS) {
+      setPendingTrimFile(file);
+      setSelectedProfile(null);
+      toast(`Audio is ${dur.toFixed(1)}s — trim to ≤${CLONE_MAX_SECONDS}s for best cloning`);
+      return;
+    }
+    setRefAudio(file);
+    setSelectedProfile(null);
+  }, []);
   const [refText, setRefText] = useState('');
   const [instruct, setInstruct] = useState('');
   const [language, setLanguage] = useState('Auto');
@@ -478,7 +506,7 @@ function App() {
       if (saved.dubJobId) setDubJobId(saved.dubJobId);
       if (saved.dubFilename) setDubFilename(saved.dubFilename);
       if (saved.dubDuration !== undefined) setDubDuration(saved.dubDuration);
-      if (saved.dubSegments) setDubSegments(saved.dubSegments);
+      if (saved.dubSegments) setDubSegments(saved.dubSegments.map(s => ({ ...s, text_original: s.text_original || s.text || '' })));
       if (saved.dubLang) setDubLang(saved.dubLang);
       if (saved.dubLangCode) setDubLangCode(saved.dubLangCode);
       if (saved.dubTracks) setDubTracks(saved.dubTracks);
@@ -866,14 +894,12 @@ function App() {
           const cleanFilename = res.headers.get("X-Clean-Filename") || "recording_clean.wav";
           const cleanFile = new File([cleanBlob], cleanFilename, { type: "audio/wav" });
 
-          setRefAudio(cleanFile);
-          setSelectedProfile(null);
+          await ingestRefAudio(cleanFile);
           toast.success("🎙️ Recording cleaned & loaded!");
         } catch (e) {
           // Fallback: use raw recording without denoising
           const rawFile = new File([blob], "recording.webm", { type: "audio/webm" });
-          setRefAudio(rawFile);
-          setSelectedProfile(null);
+          await ingestRefAudio(rawFile);
           toast.success("Recording loaded (raw — denoising unavailable)");
         } finally {
           setIsCleaning(false);
@@ -924,11 +950,61 @@ function App() {
       setDubJobId(data.job_id); setDubFilename(data.filename); setDubDuration(data.duration);
       setDubStep('transcribing');
       setTranscribeStart(Date.now());
-      const tRes = await fetch(`${API}/dub/transcribe/${data.job_id}`, { method: "POST", signal: ctrl.signal });
-      if (!tRes.ok) throw new Error(await tRes.text());
-      const tData = await tRes.json();
-      setDubSegments(tData.segments.map((s, i) => ({ ...s, id: i })));
-      setDubTranscript(tData.full_transcript || '');
+      setDubSegments([]);
+
+      await new Promise((resolve, reject) => {
+        const evt = new EventSource(`${API}/dub/transcribe-stream/${data.job_id}`);
+        let gotFinal = false;
+
+        const close = () => { try { evt.close(); } catch {} };
+        const onAbortSignal = () => { close(); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); };
+        ctrl.signal.addEventListener('abort', onAbortSignal, { once: true });
+
+        evt.addEventListener('start', () => {});
+        evt.addEventListener('segments', (e) => {
+          try {
+            const m = JSON.parse(e.data);
+            const incoming = (m.segments || []).map((s, i) => ({
+              ...s,
+              id: s.id != null ? String(s.id) : `c${m.chunk}-${i}`,
+              text_original: s.text_original || s.text || '',
+            }));
+            setDubSegments(prev => [...prev, ...incoming]);
+          } catch (err) { /* ignore parse errors */ }
+        });
+        evt.addEventListener('final', (e) => {
+          try {
+            const m = JSON.parse(e.data);
+            gotFinal = true;
+            setDubSegments((m.segments || []).map((s, i) => ({
+              ...s,
+              id: s.id != null ? String(s.id) : String(i),
+              text_original: s.text_original || s.text || '',
+            })));
+            setDubTranscript(m.full_transcript || '');
+          } catch {}
+        });
+        evt.addEventListener('done', () => {
+          close();
+          ctrl.signal.removeEventListener('abort', onAbortSignal);
+          resolve();
+        });
+        evt.addEventListener('aborted', () => {
+          close();
+          ctrl.signal.removeEventListener('abort', onAbortSignal);
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+        evt.addEventListener('error', (e) => {
+          try {
+            const m = e.data ? JSON.parse(e.data) : null;
+            if (m && m.detail) { close(); reject(new Error(m.detail)); return; }
+          } catch {}
+          // EventSource auto-retries on network errors; treat as fatal after final is in.
+          if (gotFinal) { close(); resolve(); }
+          else if (evt.readyState === EventSource.CLOSED) { reject(new Error('transcribe stream closed')); }
+        });
+      });
+
       setTranscribeStart(null);
       setDubStep('editing');
     } catch (err) {
@@ -983,7 +1059,13 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          segments: dubSegments.map(s => ({ id: s.id, text: s.text, target_lang: s.target_lang })),
+          // Always translate from the preserved ORIGINAL text so switching target
+          // languages doesn't compound errors (de → fr translating already-German).
+          segments: dubSegments.map(s => ({
+            id: String(s.id),
+            text: (s.text_original && s.text_original.trim()) ? s.text_original : s.text,
+            target_lang: s.target_lang,
+          })),
           target_lang: dubLangCode,
           provider: translateProvider,
         }),
@@ -991,8 +1073,27 @@ function App() {
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       const translatedMap = {};
-      data.translated.forEach(t => { translatedMap[t.id] = t.text; });
-      setDubSegments(dubSegments.map(s => ({ ...s, text: translatedMap[s.id] || s.text })));
+      const errors = [];
+      (data.translated || []).forEach(t => {
+        translatedMap[t.id] = t;
+        if (t.error) errors.push({ id: t.id, error: t.error });
+      });
+      setDubSegments(dubSegments.map(s => {
+        const hit = translatedMap[s.id];
+        if (!hit) return s;
+        const newText = (hit.text && hit.text.trim()) ? hit.text : s.text;
+        return { ...s, text: newText, translate_error: hit.error || undefined };
+      }));
+      if (errors.length) {
+        const unique = [...new Set(errors.map(e => e.error))];
+        toast.error(
+          `${errors.length}/${data.translated.length} segment${errors.length === 1 ? '' : 's'} failed: ${unique[0].slice(0, 120)}`,
+          { duration: 6000 }
+        );
+        console.warn('Translation errors:', errors);
+      } else {
+        toast.success(`Translated ${data.translated.length} segment${data.translated.length === 1 ? '' : 's'} → ${data.target_lang}`);
+      }
     } catch (err) { setDubError('Translation failed: ' + err.message); }
     setIsTranslating(false);
   };
@@ -1277,7 +1378,7 @@ function App() {
       setDubJobId(s.dubJobId || null);
       setDubFilename(s.dubFilename || data.video_path || '');
       setDubDuration(s.dubDuration || data.duration || 0);
-      setDubSegments(s.dubSegments || []);
+      setDubSegments((s.dubSegments || []).map(x => ({ ...x, text_original: x.text_original || x.text || '' })));
       setDubLang(s.dubLang || 'Auto');
       setDubLangCode(s.dubLangCode || 'en');
       setDubInstruct(s.dubInstruct || '');
@@ -1313,7 +1414,7 @@ function App() {
       setDubJobId(item.id);
       setDubFilename(job.filename || '');
       setDubDuration(job.duration || 0);
-      setDubSegments((job.segments || []).map((s, i) => ({ ...s, id: s.id !== undefined ? s.id : i })));
+      setDubSegments((job.segments || []).map((s, i) => ({ ...s, id: s.id != null ? String(s.id) : String(i), text_original: s.text_original || s.text || '' })));
       setDubTranscript(job.full_transcript || '');
       setDubLang(item.language || 'Auto');
       setDubLangCode(item.language_code || 'und');
@@ -1355,6 +1456,14 @@ function App() {
 
   return (
     <div className={`app-container${isSidebarCollapsed ? ' sidebar-collapsed' : ''}`} style={{ zoom: uiScale }}>
+      {pendingTrimFile && (
+        <AudioTrimmer
+          file={pendingTrimFile}
+          maxSeconds={CLONE_MAX_SECONDS}
+          onCancel={() => setPendingTrimFile(null)}
+          onConfirm={(trimmed) => { setPendingTrimFile(null); setRefAudio(trimmed); setSelectedProfile(null); toast.success('Trimmed audio loaded'); }}
+        />
+      )}
       <Toaster position="top-center" toastOptions={{
         style: { background: 'rgba(40,40,40,0.9)', backdropFilter: 'blur(10px)', color: '#ebdbb2', border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.72rem', padding: '4px 8px' },
         error: { iconTheme: { primary: '#fb4934', secondary: '#fff' } },
@@ -1954,6 +2063,13 @@ function App() {
                         {isTranslating ? <Loader className="spinner" size={9}/> : <Languages size={10}/>}
                         {isTranslating ? 'Translating…' : 'Translate All'}
                       </button>
+                      <button
+                        onClick={() => editSegments(dubSegments.map(s => ({ ...s, text: s.text_original || s.text, translate_error: undefined })))}
+                        disabled={!dubSegments.some(s => s.text_original && s.text_original !== s.text)}
+                        title="Restore all segments to the original transcribed text"
+                        style={{padding:'3px 8px', background:'rgba(131,165,152,0.08)', border:'1px solid rgba(131,165,152,0.2)', color:'#83a598', borderRadius:4, cursor:'pointer', fontSize:'0.62rem', fontWeight:500, display:'flex', alignItems:'center', gap:3, whiteSpace:'nowrap'}}>
+                        ↺ Restore
+                      </button>
                       <button onClick={handleCleanupSegments} disabled={!dubSegments.length || !dubJobId}
                         title="Merge tiny fragments and adjacent short segments"
                         style={{padding:'3px 8px', background:'rgba(250,189,47,0.10)', border:'1px solid rgba(250,189,47,0.22)', color:'#fabd2f', borderRadius:4, cursor:'pointer', fontSize:'0.62rem', fontWeight:500, display:'flex', alignItems:'center', gap:3, whiteSpace:'nowrap'}}>
@@ -2046,9 +2162,28 @@ function App() {
                             )}
                           </span>
                           <span style={{width:50, fontSize:'0.58rem', color:'#a89984'}}>{seg.speaker_id || ''}</span>
-                          <input className="input-base segment-input" value={seg.text}
-                            onChange={e => editSegments(dubSegments.map(s => s.id===seg.id?{...s,text:e.target.value}:s))}
-                            disabled={dubStep==='generating'||dubStep==='stopping'}/>
+                          <span style={{flex:1, display:'flex', flexDirection:'column', gap:2, minWidth:0}}>
+                            <input className="input-base segment-input" value={seg.text}
+                              onChange={e => editSegments(dubSegments.map(s => s.id===seg.id?{...s,text:e.target.value}:s))}
+                              disabled={dubStep==='generating'||dubStep==='stopping'}
+                              title={seg.translate_error ? `Translation error: ${seg.translate_error}` : undefined}
+                              style={seg.translate_error ? {borderColor:'rgba(251,73,52,0.5)'} : undefined}/>
+                            {seg.text_original && seg.text_original !== seg.text && (
+                              <span style={{fontSize:'0.55rem', color:'#6b6657', display:'flex', alignItems:'center', gap:4, padding:'0 4px', overflow:'hidden'}}>
+                                <span style={{opacity:0.8, textTransform:'uppercase', fontWeight:600, fontSize:'0.5rem', color:'#7c6f64'}}>orig</span>
+                                <span style={{flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}} title={seg.text_original}>
+                                  {seg.text_original}
+                                </span>
+                                <button
+                                  onClick={() => editSegments(dubSegments.map(s => s.id===seg.id?{...s,text:seg.text_original,translate_error:undefined}:s))}
+                                  disabled={dubStep==='generating'||dubStep==='stopping'}
+                                  title="Restore original text"
+                                  style={{background:'none', border:'none', color:'#83a598', cursor:'pointer', padding:0, fontSize:'0.55rem'}}>
+                                  ↺
+                                </button>
+                              </span>
+                            )}
+                          </span>
                           <select className="input-base segment-input" style={{width:45, fontSize:'0.55rem', padding:'1px 2px'}}
                             value={seg.target_lang||''} disabled={dubStep==='generating'||dubStep==='stopping'}
                             onChange={e => editSegments(dubSegments.map(s => s.id===seg.id?{...s,target_lang:e.target.value}:s))}>
@@ -2257,7 +2392,7 @@ function App() {
                   {!selectedProfile && (
                     <>
                       <div style={{display:'flex', gap:'8px', alignItems:'stretch'}}>
-                        <input type="file" accept="audio/*" onChange={e => { setRefAudio(e.target.files[0]); setSelectedProfile(null); }} style={{display:'none'}} id="audio-upload" />
+                        <input type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg" onChange={e => { const f = e.target.files[0]; ingestRefAudio(f); e.target.value=''; }} style={{display:'none'}} id="audio-upload" />
                         <label htmlFor="audio-upload" className="file-drag" style={{padding: '6px', flex:1}}
                           onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor='#d3869b'; e.currentTarget.style.background='rgba(211,134,155,0.05)'; }}
                           onDragLeave={e => { e.currentTarget.style.borderColor=''; e.currentTarget.style.background=''; }}
@@ -2265,7 +2400,8 @@ function App() {
                             e.preventDefault();
                             e.currentTarget.style.borderColor=''; e.currentTarget.style.background='';
                             const file = e.dataTransfer.files[0];
-                            if (file && file.type.startsWith('audio/')) { setRefAudio(file); setSelectedProfile(null); }
+                            const okType = file && (file.type.startsWith('audio/') || /\.(mp3|wav|m4a|flac|ogg|aac|webm)$/i.test(file.name));
+                            if (okType) ingestRefAudio(file);
                           }}>
                           <UploadCloud color="#a89984" size={18}/>
                           <p>{refAudio ? <span style={{color:'#ebdbb2'}}>{refAudio.name}</span> : "Drop audio or click · WAV / MP3"}</p>

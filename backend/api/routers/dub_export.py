@@ -194,12 +194,13 @@ async def dub_download(
     cmd += ["-shortest", output_path, "-y"]
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise Exception(stderr.decode())
+        rc, _, stderr = await run_ffmpeg(cmd, timeout=1800.0)
+        if rc != 0:
+            raise Exception(stderr.decode(errors="replace") if stderr else "ffmpeg mux non-zero")
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="ffmpeg mux timed out")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ffmpeg mux failed: {str(e)}")
 

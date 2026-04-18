@@ -22,7 +22,7 @@ from core.tasks import task_manager
 from schemas.requests import DubRequest, TranslateRequest
 from services.model_manager import get_model, _gpu_pool, _cpu_pool, get_best_device, get_diarization_pipeline
 from services.audio_dsp import apply_mastering, normalize_audio
-from services.ffmpeg_utils import find_ffmpeg
+from services.ffmpeg_utils import find_ffmpeg, _get_semaphore, _spawn_with_retry
 from services.segmentation import (
     segment_transcript,
     assign_speakers_from_diarization,
@@ -254,23 +254,40 @@ async def dub_upload(video: UploadFile = File(...), job_id: Optional[str] = Form
     ffmpeg = find_ffmpeg()
 
     async def _run_proc(cmd, timeout: float = 900.0):
-        p = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        _register_proc(job_id, p)
-        try:
+        # Gate through the shared ffmpeg semaphore + EAGAIN retry so concurrent
+        # dub uploads can't pile up posix_spawn failures under macOS fd limits.
+        async with _get_semaphore():
+            p = await _spawn_with_retry(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _register_proc(job_id, p)
             try:
-                stdout, stderr = await asyncio.wait_for(p.communicate(), timeout=timeout)
-            except asyncio.TimeoutError:
                 try:
-                    p.kill()
-                except ProcessLookupError:
-                    pass
-                raise HTTPException(status_code=504, detail=f"subprocess timed out after {timeout}s")
-            return p, stdout, stderr
-        finally:
-            _unregister_proc(job_id, p)
+                    stdout, stderr = await asyncio.wait_for(p.communicate(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    try:
+                        p.kill()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        await asyncio.wait_for(p.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        pass
+                    raise HTTPException(status_code=504, detail=f"subprocess timed out after {timeout}s")
+                return p, stdout, stderr
+            finally:
+                _unregister_proc(job_id, p)
+                if p.returncode is None:
+                    try:
+                        p.kill()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        await asyncio.wait_for(p.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        pass
 
     try:
         try:
@@ -356,6 +373,165 @@ async def dub_upload(video: UploadFile = File(...), job_id: Optional[str] = Form
     finally:
         with _active_procs_lock:
             _active_procs.pop(job_id, None)
+
+
+TRANSCRIBE_CHUNK_S = float(os.environ.get("OMNIVOICE_TRANSCRIBE_CHUNK_S", "30.0"))
+
+
+def _sse_event(event: str, payload) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+@router.get("/dub/transcribe-stream/{job_id}")
+async def dub_transcribe_stream(job_id: str):
+    """Stream per-chunk segments via SSE, then emit diarized final pass."""
+    job = _get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    _model = await get_model()
+    if _model._asr_pipe is None:
+        raise HTTPException(status_code=503, detail="ASR not loaded")
+
+    asr_audio_target = job.get("vocals_path")
+    if not asr_audio_target or not os.path.exists(asr_audio_target):
+        asr_audio_target = job.get("audio_path")
+    if not asr_audio_target or not os.path.exists(asr_audio_target):
+        raise HTTPException(status_code=404, detail="No audio available for transcription")
+
+    use_mlx = torch.backends.mps.is_available()
+    asr_model = os.environ.get("ASR_MODEL", "mlx-community/whisper-large-v3-mlx")
+    scene_cuts = job.get("scene_cuts") or []
+
+    async def gen():
+        import math
+        import tempfile
+        loop = asyncio.get_event_loop()
+
+        def _load():
+            audio_np, sr = sf.read(asr_audio_target, dtype="float32")
+            if audio_np.ndim > 1:
+                audio_np = audio_np.mean(axis=1)
+            return audio_np, sr
+
+        try:
+            audio_np, sr = await loop.run_in_executor(_cpu_pool, _load)
+        except Exception as e:
+            yield _sse_event("error", {"detail": f"audio load failed: {e}"})
+            return
+
+        total = float(len(audio_np)) / float(sr) if sr else 0.0
+        chunks_n = max(1, int(math.ceil(total / TRANSCRIBE_CHUNK_S))) if total > 0 else 1
+        yield _sse_event("start", {"duration": total, "chunks": chunks_n, "chunk_s": TRANSCRIBE_CHUNK_S})
+
+        all_segments: list[dict] = []
+        detected_lang = None
+        next_seg_id = 0
+
+        for i in range(chunks_n):
+            if job.get("aborted"):
+                yield _sse_event("aborted", {})
+                return
+            t0 = i * TRANSCRIBE_CHUNK_S
+            t1 = min(total, t0 + TRANSCRIBE_CHUNK_S)
+            s_from = int(t0 * sr)
+            s_to = int(t1 * sr)
+            chunk_arr = audio_np[s_from:s_to]
+            if len(chunk_arr) == 0:
+                continue
+
+            def _transcribe_chunk(arr=chunk_arr, offset=t0, local_sr=sr):
+                try:
+                    if use_mlx:
+                        import mlx_whisper
+                        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                        tmp.close()
+                        try:
+                            sf.write(tmp.name, arr, local_sr)
+                            r = mlx_whisper.transcribe(
+                                tmp.name, path_or_hf_repo=asr_model, word_timestamps=True,
+                            )
+                        finally:
+                            try: os.remove(tmp.name)
+                            except OSError: pass
+                        shifted = []
+                        for seg in r.get("segments", []) or []:
+                            shifted.append({
+                                "text": seg.get("text", ""),
+                                "timestamp": (float(seg.get("start", 0.0)) + offset,
+                                              float(seg.get("end", 0.0)) + offset),
+                            })
+                        return {"chunks": shifted, "language": r.get("language")}
+                    else:
+                        r = _model._asr_pipe(
+                            {"array": arr, "sampling_rate": local_sr},
+                            return_timestamps=True, chunk_length_s=15, batch_size=1,
+                        )
+                        shifted = []
+                        for c in (r.get("chunks", []) if isinstance(r, dict) else []):
+                            ts = c.get("timestamp", (0.0, 0.0)) or (0.0, 0.0)
+                            a0 = (ts[0] if ts[0] is not None else 0.0) + offset
+                            a1 = (ts[1] if ts[1] is not None else 0.0) + offset
+                            shifted.append({"text": c.get("text", ""), "timestamp": (a0, a1)})
+                        return {"chunks": shifted, "language": r.get("language") if isinstance(r, dict) else None}
+                except Exception as e:
+                    logger.exception("chunk transcribe failed")
+                    return {"chunks": [], "language": None, "error": str(e)}
+
+            part = await loop.run_in_executor(_gpu_pool, _transcribe_chunk)
+            if detected_lang is None and part.get("language"):
+                detected_lang = part["language"]
+            chunk_segs = segment_transcript(part, duration=t1, scene_cuts=scene_cuts)
+            chunk_segs = assign_speakers_heuristic(chunk_segs)
+            for s in chunk_segs:
+                s["id"] = f"s{next_seg_id:05x}"
+                next_seg_id += 1
+            all_segments.extend(chunk_segs)
+            yield _sse_event("segments", {
+                "chunk": i, "total_chunks": chunks_n,
+                "segments": chunk_segs,
+                "progress": (i + 1) / chunks_n,
+                "error": part.get("error"),
+            })
+
+        if job.get("aborted"):
+            yield _sse_event("aborted", {})
+            return
+
+        def _diarize():
+            diar_pipe = get_diarization_pipeline()
+            try:
+                if diar_pipe:
+                    diar = diar_pipe(asr_audio_target)
+                    return assign_speakers_from_diarization(all_segments, diar)
+            except Exception as e:
+                logger.error(f"Diarization failed: {e}")
+            return assign_speakers_heuristic(all_segments)
+
+        final_segs = await loop.run_in_executor(_gpu_pool, _diarize)
+        job["segments"] = final_segs
+        job["source_lang"] = ((detected_lang or "en").split("_")[0][:2] or "en").lower()
+        job["full_transcript"] = " ".join(s.get("text", "") for s in final_segs)
+        _save_job(job_id, job)
+
+        if torch.backends.mps.is_available():
+            try: torch.mps.empty_cache()
+            except Exception: pass
+
+        yield _sse_event("final", {
+            "segments": final_segs,
+            "source_lang": job["source_lang"],
+            "full_transcript": job["full_transcript"],
+        })
+        yield _sse_event("done", {})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/dub/transcribe/{job_id}")

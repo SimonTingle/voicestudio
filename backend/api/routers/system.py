@@ -11,7 +11,7 @@ import shutil
 
 from core.config import OUTPUTS_DIR
 from services.model_manager import get_model_status, get_best_device
-from services.ffmpeg_utils import find_ffmpeg
+from services.ffmpeg_utils import find_ffmpeg, run_ffmpeg
 
 router = APIRouter()
 logger = logging.getLogger("omnivoice.api")
@@ -72,59 +72,43 @@ async def _do_clean_audio(audio, tmp_dir, clean_id):
 
     converted_path = os.path.join(tmp_dir, "converted.wav")
     ffmpeg = find_ffmpeg()
-    proc = await asyncio.create_subprocess_exec(
-        ffmpeg, "-y", "-i", raw_path, "-ar", "24000", "-ac", "1", converted_path,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-    )
     try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120.0)
+        rc, _, _ = await run_ffmpeg(
+            [ffmpeg, "-y", "-i", raw_path, "-ar", "24000", "-ac", "1", converted_path],
+            timeout=120.0,
+        )
     except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
+        rc = -1
+    if rc != 0:
         converted_path = raw_path
-    else:
-        if proc.returncode != 0:
-            converted_path = raw_path
 
     clean_path = converted_path
     try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "demucs.separate", "--two-stems", "vocals", "-n", "htdemucs",
-            "-d", get_best_device(), converted_path, "-o", tmp_dir,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        rc, _, _ = await run_ffmpeg(
+            [sys.executable, "-m", "demucs.separate", "--two-stems", "vocals", "-n", "htdemucs",
+             "-d", get_best_device(), converted_path, "-o", tmp_dir],
+            timeout=900.0,
         )
-        try:
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=900.0)
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            raise Exception("demucs timed out")
-        if proc.returncode == 0:
+        if rc == 0:
             demucs_out = os.path.join(tmp_dir, "htdemucs", "converted")
             vocals_file = os.path.join(demucs_out, "vocals.wav")
             if os.path.exists(vocals_file):
                 clean_path = vocals_file
+    except asyncio.TimeoutError:
+        logger.warning("Demucs timed out for mic audio, using raw")
     except Exception as e:
         logger.warning(f"Demucs failed for mic audio, using raw: {e}")
 
     clean_filename = f"mic_{clean_id}.wav"
     final_path = os.path.join(OUTPUTS_DIR, clean_filename)
 
-    proc = await asyncio.create_subprocess_exec(
-        ffmpeg, "-y", "-i", clean_path, "-ar", "24000", "-ac", "1", final_path,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-    )
     try:
-        await asyncio.wait_for(proc.communicate(), timeout=120.0)
+        await run_ffmpeg(
+            [ffmpeg, "-y", "-i", clean_path, "-ar", "24000", "-ac", "1", final_path],
+            timeout=120.0,
+        )
     except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
+        pass
     if not os.path.exists(final_path):
         shutil.copy2(clean_path, final_path)
 

@@ -5,6 +5,8 @@ import time
 import asyncio
 import tempfile
 import contextlib
+import logging
+import traceback
 import torch
 import torchaudio
 from typing import Optional
@@ -17,6 +19,7 @@ from services.model_manager import get_model, _gpu_pool
 from services.audio_dsp import apply_mastering, normalize_audio
 
 router = APIRouter()
+logger = logging.getLogger("omnivoice.generate")
 
 def _run_inference(
     model, text, language, ref_audio_path, ref_text, instruct, duration,
@@ -81,6 +84,7 @@ async def generate_speech(
     ref_audio_path = None
     cleanup_ref = False
     used_seed = seed
+    resolved_profile_id = None
 
     if profile_id:
         conn = get_db()
@@ -89,6 +93,7 @@ async def generate_speech(
         finally:
             conn.close()
         if row:
+            resolved_profile_id = profile_id
             if row["is_locked"] and row["locked_audio_path"]:
                 ref_audio_path = os.path.join(VOICES_DIR, row["locked_audio_path"])
                 if not ref_text:
@@ -144,7 +149,7 @@ async def generate_speech(
             conn.execute(
                 "INSERT INTO generation_history (id, text, mode, language, instruct, profile_id, audio_path, duration_seconds, generation_time, seed, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (audio_id, text[:200], "clone" if ref_audio_path else "design",
-                 language or "Auto", instruct or "", profile_id or "",
+                 language or "Auto", instruct or "", resolved_profile_id,
                  audio_filename, audio_dur, gen_time, used_seed, time.time())
             )
 
@@ -170,7 +175,11 @@ async def generate_speech(
                 "Content-Length": str(len(wav_bytes)),
             }
         )
+    except HTTPException:
+        raise
     except Exception as e:
+        tb = traceback.format_exc()
+        logger.error("Inference failed: %s\n%s", e, tb)
         raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
     finally:
         if cleanup_ref and ref_audio_path:

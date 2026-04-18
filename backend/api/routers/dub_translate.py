@@ -1,4 +1,5 @@
 import os
+import time
 import asyncio
 import logging
 from fastapi import APIRouter
@@ -220,28 +221,43 @@ async def dub_translate(req: TranslateRequest):
         # Legacy / API Deep_Translator logic
         src_arg = TRANSLATE_CODES.get(src_lang, src_lang) or "auto"
 
-        def _translate_single(seg):
-            try:
-                if not seg.text or not seg.text.strip():
-                    return {"id": seg.id, "text": seg.text}
-                seg_lc = TRANSLATE_CODES.get(seg.target_lang, seg.target_lang) if seg.target_lang else lang_code
-                if provider == "deepl":
-                    from deep_translator import DeepL
-                    translator = DeepL(api_key=api_key, source=src_arg, target=seg_lc)
-                elif provider == "mymemory":
-                    from deep_translator import MyMemoryTranslator
-                    translator = MyMemoryTranslator(source=src_arg, target=seg_lc)
-                elif provider == "microsoft":
-                    from deep_translator import MicrosoftTranslator
-                    translator = MicrosoftTranslator(api_key=api_key, source=src_arg, target=seg_lc)
-                else:
-                    from deep_translator import GoogleTranslator
-                    translator = GoogleTranslator(source=src_arg, target=seg_lc)
+        def _build_translator(src, tgt):
+            if provider == "deepl":
+                from deep_translator import DeepL
+                return DeepL(api_key=api_key, source=src, target=tgt)
+            if provider == "mymemory":
+                from deep_translator import MyMemoryTranslator
+                return MyMemoryTranslator(source=src, target=tgt)
+            if provider == "microsoft":
+                from deep_translator import MicrosoftTranslator
+                return MicrosoftTranslator(api_key=api_key, source=src, target=tgt)
+            from deep_translator import GoogleTranslator
+            return GoogleTranslator(source=src, target=tgt)
 
-                translated = translator.translate(seg.text)
-                return {"id": seg.id, "text": translated or seg.text}
-            except Exception as e:
-                return {"id": seg.id, "text": seg.text, "error": str(e)}
+        def _translate_single(seg):
+            seg_lc = (
+                TRANSLATE_CODES.get(seg.target_lang, seg.target_lang)
+                if seg.target_lang else lang_code
+            )
+            if not seg.text or not seg.text.strip():
+                return {"id": seg.id, "text": seg.text}
+            last_err = None
+            # Try: (src_arg, tgt) → retry once → fall back to (auto, tgt).
+            for attempt, src in enumerate([src_arg, src_arg, "auto"]):
+                try:
+                    out = _build_translator(src, seg_lc).translate(seg.text)
+                    if out and out.strip():
+                        return {"id": seg.id, "text": out}
+                    last_err = "empty translation"
+                except Exception as e:
+                    last_err = f"{type(e).__name__}: {e}"
+                    logger.warning(
+                        "translate attempt %d %s->%s (provider=%s) failed: %s",
+                        attempt + 1, src, seg_lc, provider, e,
+                    )
+                    time.sleep(0.25 * (attempt + 1))
+            logger.error("translate %s -> %s gave up (provider=%s): %s", src_arg, seg_lc, provider, last_err)
+            return {"id": seg.id, "text": seg.text, "error": last_err or "unknown"}
 
         tasks = [loop.run_in_executor(_cpu_pool, _translate_single, seg) for seg in req.segments]
         translated = await asyncio.gather(*tasks)
