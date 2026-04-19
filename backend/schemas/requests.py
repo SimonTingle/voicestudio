@@ -45,6 +45,10 @@ class TranslateRequest(BaseModel):
     source_lang: Optional[str] = None  # ISO 639-1; overrides job detection
     job_id: Optional[str] = None  # Dub job id, used to resolve detected source_lang
 
+class DubIngestUrlRequest(BaseModel):
+    url: str
+    job_id: Optional[str] = None
+
 class ProjectSaveRequest(BaseModel):
     name: str
     video_path: Optional[str] = None

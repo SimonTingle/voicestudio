@@ -13,6 +13,7 @@ from core.tasks import task_manager
 from schemas.requests import DubRequest
 from services.model_manager import get_model, _gpu_pool
 from services.audio_dsp import apply_mastering, normalize_audio
+from services.rvc import apply_rvc, is_enabled as rvc_is_enabled
 from api.routers.dub_core import _get_job, _save_job
 
 router = APIRouter()
@@ -130,6 +131,23 @@ async def dub_generate(job_id: str, req: DubRequest):
 
                 seg_wav_path = os.path.join(DUB_DIR, job_id, f"seg_{i}.wav")
                 torchaudio.save(seg_wav_path, audio_tensor, _model.sampling_rate)
+
+                if rvc_is_enabled():
+                    try:
+                        await loop.run_in_executor(_gpu_pool, apply_rvc, seg_wav_path)
+                        rvc_wav, rvc_sr = torchaudio.load(seg_wav_path)
+                        if rvc_sr == _model.sampling_rate:
+                            audio_tensor = rvc_wav
+
+                            target_samples = int(seg_duration * _model.sampling_rate)
+                            current_samples = audio_tensor.shape[-1]
+                            if target_samples > current_samples:
+                                audio_tensor = torch.nn.functional.pad(audio_tensor, (0, target_samples - current_samples))
+                            elif current_samples > target_samples:
+                                audio_tensor = audio_tensor[..., :target_samples]
+                    except Exception as e:
+                        yield f"data: {json.dumps({'type': 'warning', 'segment': i, 'message': f'RVC skipped: {str(e)[:120]}'})}\n\n"
+
                 all_segment_wavs.append((seg.start, seg.end, audio_tensor, _model.sampling_rate))
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'segment': i, 'error': str(e)})}\n\n"

@@ -7,6 +7,10 @@ export async function dubUpload(file, jobId, { signal } = {}) {
   return apiPost('/dub/upload', fd, { signal });
 }
 
+export async function dubIngestUrl(url, jobId, { signal } = {}) {
+  return apiPost('/dub/ingest-url', { url, job_id: jobId }, { signal });
+}
+
 export function transcribeStreamUrl(jobId) {
   return `${API}/dub/transcribe-stream/${jobId}`;
 }

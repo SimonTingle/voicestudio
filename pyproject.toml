@@ -47,6 +47,7 @@ dependencies = [
     "pedalboard>=0.9.14",
     "mlx-whisper>=0.2.1",
     "demucs>=4.0.1",
+    "yt-dlp>=2024.12.13",
 ]
 
 [project.optional-dependencies]

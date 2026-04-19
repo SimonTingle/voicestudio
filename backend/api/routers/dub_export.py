@@ -230,6 +230,90 @@ async def dub_get_media(job_id: str):
         raise HTTPException(status_code=404, detail="Media file not found")
     return FileResponse(job["video_path"])
 
+@router.get("/dub/preview-video/{job_id}")
+async def dub_preview_video(
+    job_id: str,
+    lang: str = Query(..., description="Language code of the dubbed track to mux in"),
+    preserve_bg: bool = Query(True),
+):
+    """Return an inline-playable MP4 with the chosen dubbed track as sole audio.
+
+    Caches per lang+preserve_bg combination under exports/preview_{lang}_{bg}.mp4.
+    Cache is invalidated when the underlying dubbed track mtime is newer than the cache.
+    """
+    job = _get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    tracks = job.get("dubbed_tracks", {})
+    track_info = tracks.get(lang)
+    if not track_info:
+        raise HTTPException(status_code=404, detail=f"No dubbed track for lang={lang}")
+
+    track_path = track_info.get("path")
+    if not track_path or not os.path.exists(track_path):
+        raise HTTPException(status_code=404, detail="Dubbed track file missing")
+
+    video_path = job.get("video_path")
+    if not video_path or not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Source video missing")
+
+    bg_audio = job.get("no_vocals_path") if preserve_bg else None
+    has_bg = bool(bg_audio and os.path.exists(bg_audio))
+
+    exports_dir = os.path.join(DUB_DIR, job_id, "exports")
+    os.makedirs(exports_dir, exist_ok=True)
+    bg_suffix = "bg" if (preserve_bg and has_bg) else "nobg"
+    preview_path = os.path.join(exports_dir, f"preview_{lang}_{bg_suffix}.mp4")
+
+    track_mtime = os.path.getmtime(track_path)
+    cache_ok = (
+        os.path.exists(preview_path)
+        and os.path.getsize(preview_path) > 0
+        and os.path.getmtime(preview_path) >= track_mtime
+    )
+
+    if not cache_ok:
+        ffmpeg = find_ffmpeg()
+        cmd = [ffmpeg, "-i", video_path]
+        input_idx = 1
+        if preserve_bg and has_bg:
+            cmd += ["-i", bg_audio]
+            bg_idx = input_idx
+            input_idx += 1
+        else:
+            bg_idx = None
+        cmd += ["-i", track_path]
+        track_idx = input_idx
+
+        cmd += ["-map", "0:v:0"]
+        if bg_idx is not None:
+            cmd += [
+                "-filter_complex",
+                f"[{bg_idx}:a][{track_idx}:a]amix=inputs=2:duration=longest:dropout_transition=2:weights=0.8 1.2[aout]",
+                "-map", "[aout]",
+            ]
+        else:
+            cmd += ["-map", f"{track_idx}:a:0"]
+        cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", preview_path, "-y"]
+
+        try:
+            rc, _, stderr = await run_ffmpeg(cmd, timeout=900.0)
+            if rc != 0:
+                raise Exception(stderr.decode(errors="replace") if stderr else "ffmpeg mux non-zero")
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="preview mux timed out")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"preview mux failed: {str(e)[:300]}")
+
+        if not os.path.exists(preview_path) or os.path.getsize(preview_path) == 0:
+            raise HTTPException(status_code=500, detail="preview mux produced empty file")
+
+    return FileResponse(preview_path, media_type="video/mp4")
+
+
 @router.get("/dub/thumb/{job_id}")
 async def dub_get_thumb(job_id: str):
     """Serve the extracted dub video thumbnail (jpg). 404 if not generated."""

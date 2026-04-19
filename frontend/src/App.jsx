@@ -30,7 +30,7 @@ import { listProfiles, createProfile, deleteProfile as apiDeleteProfile, lockPro
 import { listHistory, clearHistory, generateSpeech, audioUrlWithCacheBust } from './api/generate';
 import { listProjects, saveProject, loadProject as apiLoadProject, deleteProject as apiDeleteProject } from './api/projects';
 import {
-  dubUpload, dubAbort as apiDubAbort, dubCleanupSegments, dubTranslate, dubGenerate,
+  dubUpload, dubIngestUrl, dubAbort as apiDubAbort, dubCleanupSegments, dubTranslate, dubGenerate,
   tasksStreamUrl, tasksCancel, listDubHistory, clearDubHistory, transcribeStreamUrl,
 } from './api/dub';
 import { listExportHistory, exportAction, exportReveal, exportRecord } from './api/exports';
@@ -282,6 +282,7 @@ function App() {
   const [transcribeStart, setTranscribeStart] = useState(null);
   const [transcribeElapsed, setTranscribeElapsed] = useState(0);
   const [dubTaskId, setDubTaskId] = useState(null);
+  const [dubPrepStage, setDubPrepStage] = useState(null); // 'download' | 'extract' | 'demucs' | 'scene' | null
 
   // ═══ STUDIO PROJECTS ═══
   const [studioProjects, setStudioProjects] = useState([]);
@@ -982,83 +983,190 @@ function App() {
   const dubAbortCtrlRef = useRef(null);
   const dubClientJobIdRef = useRef(null);
 
+  // Shared: once backend has a processed job, wait on SSE transcribe stream.
+  const _waitForTranscribe = (jobId, ctrl) => new Promise((resolve, reject) => {
+    const evt = new EventSource(transcribeStreamUrl(jobId));
+    let gotFinal = false;
+
+    const close = () => { try { evt.close(); } catch {} };
+    const onAbortSignal = () => { close(); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); };
+    ctrl.signal.addEventListener('abort', onAbortSignal, { once: true });
+
+    evt.addEventListener('start', () => {});
+    evt.addEventListener('segments', (e) => {
+      try {
+        const m = JSON.parse(e.data);
+        const incoming = (m.segments || []).map((s, i) => ({
+          ...s,
+          id: s.id != null ? String(s.id) : `c${m.chunk}-${i}`,
+          text_original: s.text_original || s.text || '',
+        }));
+        setDubSegments(prev => [...prev, ...incoming]);
+      } catch (err) { /* ignore parse errors */ }
+    });
+    evt.addEventListener('final', (e) => {
+      try {
+        const m = JSON.parse(e.data);
+        gotFinal = true;
+        setDubSegments((m.segments || []).map((s, i) => ({
+          ...s,
+          id: s.id != null ? String(s.id) : String(i),
+          text_original: s.text_original || s.text || '',
+        })));
+        setDubTranscript(m.full_transcript || '');
+      } catch {}
+    });
+    evt.addEventListener('done', () => {
+      close();
+      ctrl.signal.removeEventListener('abort', onAbortSignal);
+      resolve();
+    });
+    evt.addEventListener('aborted', () => {
+      close();
+      ctrl.signal.removeEventListener('abort', onAbortSignal);
+      reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    });
+    evt.addEventListener('error', (e) => {
+      try {
+        const m = e.data ? JSON.parse(e.data) : null;
+        if (m && m.detail) { close(); reject(new Error(m.detail)); return; }
+      } catch {}
+      if (gotFinal) { close(); resolve(); }
+      else if (evt.readyState === EventSource.CLOSED) { reject(new Error('transcribe stream closed')); }
+    });
+  });
+
+  // Shared: listen to task_manager SSE and resolve when 'ready' event lands.
+  // Updates dubPrepStage + dubJobId + dubDuration + dubFilename as stages advance.
+  const _waitForPrep = (taskId, ctrl) => new Promise((resolve, reject) => {
+    const evt = new EventSource(tasksStreamUrl(taskId));
+    const close = () => { try { evt.close(); } catch {} };
+    const onAbort = () => { close(); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); };
+    ctrl.signal.addEventListener('abort', onAbort, { once: true });
+
+    let lastData = null;
+    evt.onmessage = (e) => {
+      if (!e.data) return;
+      let m;
+      try { m = JSON.parse(e.data); } catch { return; }
+      lastData = m;
+      switch (m.type) {
+        case 'download_start': setDubPrepStage('download'); break;
+        case 'download_done':
+          if (m.filename) setDubFilename(m.filename);
+          break;
+        case 'extract_start': setDubPrepStage('extract'); break;
+        case 'extract_done':
+          // Backend-assigned real job_id lands here (same as client-supplied, but safe)
+          if (m.job_id) setDubJobId(m.job_id);
+          if (typeof m.duration === 'number') setDubDuration(m.duration);
+          if (m.filename) setDubFilename(m.filename);
+          break;
+        case 'demucs_start': setDubPrepStage('demucs'); break;
+        case 'demucs_done': break;
+        case 'scene_start': setDubPrepStage('scene'); break;
+        case 'scene_done': break;
+        case 'ready':
+          close();
+          ctrl.signal.removeEventListener('abort', onAbort);
+          resolve(m);
+          return;
+        case 'error':
+          close();
+          ctrl.signal.removeEventListener('abort', onAbort);
+          reject(new Error(`${m.stage || 'prep'}: ${m.error || 'unknown error'}`));
+          return;
+        case 'cancelled':
+          close();
+          ctrl.signal.removeEventListener('abort', onAbort);
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          return;
+        default:
+          break;
+      }
+    };
+    evt.onerror = () => {
+      if (evt.readyState === EventSource.CLOSED) {
+        close();
+        ctrl.signal.removeEventListener('abort', onAbort);
+        if (lastData && lastData.type === 'ready') resolve(lastData);
+        else reject(new Error('prep stream closed unexpectedly'));
+      }
+    };
+  });
+
   const handleDubUpload = async () => {
     if (!dubVideoFile) return;
-    setDubStep('uploading'); setDubError(''); setDubTracks([]);
+    setDubStep('uploading'); setDubError(''); setDubTracks([]); setDubPrepStage('download');
     const ctrl = new AbortController();
     dubAbortCtrlRef.current = ctrl;
-    // Generate job_id client-side so we can POST /dub/abort even during upload.
     const clientJobId = Math.random().toString(36).slice(2, 10);
     dubClientJobIdRef.current = clientJobId;
     setDubJobId(clientJobId);
     try {
       const data = await dubUpload(dubVideoFile, clientJobId, { signal: ctrl.signal });
-      setDubJobId(data.job_id); setDubFilename(data.filename); setDubDuration(data.duration);
+      setDubJobId(data.job_id); if (data.filename) setDubFilename(data.filename);
+      setDubTaskId(data.task_id);
+      setDubPrepStage('extract');
+      await _waitForPrep(data.task_id, ctrl);
+
       setDubStep('transcribing');
+      setDubPrepStage(null);
       setTranscribeStart(Date.now());
       setDubSegments([]);
 
-      await new Promise((resolve, reject) => {
-        const evt = new EventSource(transcribeStreamUrl(data.job_id));
-        let gotFinal = false;
-
-        const close = () => { try { evt.close(); } catch {} };
-        const onAbortSignal = () => { close(); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); };
-        ctrl.signal.addEventListener('abort', onAbortSignal, { once: true });
-
-        evt.addEventListener('start', () => {});
-        evt.addEventListener('segments', (e) => {
-          try {
-            const m = JSON.parse(e.data);
-            const incoming = (m.segments || []).map((s, i) => ({
-              ...s,
-              id: s.id != null ? String(s.id) : `c${m.chunk}-${i}`,
-              text_original: s.text_original || s.text || '',
-            }));
-            setDubSegments(prev => [...prev, ...incoming]);
-          } catch (err) { /* ignore parse errors */ }
-        });
-        evt.addEventListener('final', (e) => {
-          try {
-            const m = JSON.parse(e.data);
-            gotFinal = true;
-            setDubSegments((m.segments || []).map((s, i) => ({
-              ...s,
-              id: s.id != null ? String(s.id) : String(i),
-              text_original: s.text_original || s.text || '',
-            })));
-            setDubTranscript(m.full_transcript || '');
-          } catch {}
-        });
-        evt.addEventListener('done', () => {
-          close();
-          ctrl.signal.removeEventListener('abort', onAbortSignal);
-          resolve();
-        });
-        evt.addEventListener('aborted', () => {
-          close();
-          ctrl.signal.removeEventListener('abort', onAbortSignal);
-          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
-        });
-        evt.addEventListener('error', (e) => {
-          try {
-            const m = e.data ? JSON.parse(e.data) : null;
-            if (m && m.detail) { close(); reject(new Error(m.detail)); return; }
-          } catch {}
-          // EventSource auto-retries on network errors; treat as fatal after final is in.
-          if (gotFinal) { close(); resolve(); }
-          else if (evt.readyState === EventSource.CLOSED) { reject(new Error('transcribe stream closed')); }
-        });
-      });
+      await _waitForTranscribe(data.job_id, ctrl);
 
       setTranscribeStart(null);
       setDubStep('editing');
     } catch (err) {
+      setDubPrepStage(null);
       if (err.name === 'AbortError') {
         toast('Upload cancelled');
         setDubStep('idle');
       } else {
         setDubError(err.message); setDubStep('idle');
+        toast.error('Upload failed: ' + err.message);
+      }
+      setTranscribeStart(null);
+    } finally {
+      dubAbortCtrlRef.current = null;
+    }
+  };
+
+  const handleDubIngestUrl = async (url) => {
+    const clean = (url || '').trim();
+    if (!clean) return;
+    setDubStep('uploading'); setDubError(''); setDubTracks([]); setDubPrepStage('download');
+    const ctrl = new AbortController();
+    dubAbortCtrlRef.current = ctrl;
+    const clientJobId = Math.random().toString(36).slice(2, 10);
+    dubClientJobIdRef.current = clientJobId;
+    setDubJobId(clientJobId);
+    try {
+      const data = await dubIngestUrl(clean, clientJobId, { signal: ctrl.signal });
+      setDubJobId(data.job_id);
+      setDubTaskId(data.task_id);
+      await _waitForPrep(data.task_id, ctrl);
+
+      setDubStep('transcribing');
+      setDubPrepStage(null);
+      setTranscribeStart(Date.now());
+      setDubSegments([]);
+
+      await _waitForTranscribe(data.job_id, ctrl);
+
+      setTranscribeStart(null);
+      setDubStep('editing');
+      toast.success('Ingested ' + clean.slice(0, 60));
+    } catch (err) {
+      setDubPrepStage(null);
+      if (err.name === 'AbortError') {
+        toast('Ingest cancelled');
+        setDubStep('idle');
+      } else {
+        setDubError(err.message); setDubStep('idle');
+        toast.error('URL ingest failed: ' + err.message);
       }
       setTranscribeStart(null);
     } finally {
@@ -1516,7 +1624,7 @@ function App() {
           <ErrorBoundary name="dub">
           <Suspense fallback={<LazyFallback />}>
             <DubTab
-              dubJobId={dubJobId} dubStep={dubStep} dubVideoFile={dubVideoFile}
+              dubJobId={dubJobId} dubStep={dubStep} dubPrepStage={dubPrepStage} dubVideoFile={dubVideoFile}
               dubFilename={dubFilename} dubDuration={dubDuration}
               dubSegments={dubSegments} dubTranscript={dubTranscript}
               dubLang={dubLang} dubLangCode={dubLangCode} dubInstruct={dubInstruct}
@@ -1539,7 +1647,7 @@ function App() {
               setDubSegments={setDubSegments}
               setDubLang={setDubLang} setDubLangCode={setDubLangCode}
               setDubInstruct={setDubInstruct}
-              handleDubAbort={handleDubAbort} handleDubUpload={handleDubUpload}
+              handleDubAbort={handleDubAbort} handleDubUpload={handleDubUpload} handleDubIngestUrl={handleDubIngestUrl}
               handleDubStop={handleDubStop} handleDubGenerate={handleDubGenerate}
               handleDubDownload={handleDubDownload} handleDubAudioDownload={handleDubAudioDownload}
               handleSegmentPreview={handleSegmentPreview}

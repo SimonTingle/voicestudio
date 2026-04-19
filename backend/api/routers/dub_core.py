@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse, JSONRes
 from core.db import get_db, db_conn
 from core.config import DATA_DIR, DUB_DIR, PREVIEW_DIR, VOICES_DIR
 from core.tasks import task_manager
-from schemas.requests import DubRequest, TranslateRequest
+from schemas.requests import DubRequest, TranslateRequest, DubIngestUrlRequest
 from services.model_manager import get_model, _gpu_pool, _cpu_pool, get_best_device, get_diarization_pipeline
 from services.audio_dsp import apply_mastering, normalize_audio
 from services.ffmpeg_utils import find_ffmpeg, _get_semaphore, _spawn_with_retry
@@ -237,25 +237,9 @@ async def preview_serve(filename: str):
     }
     return FileResponse(path, media_type=media_types.get(ext, "application/octet-stream"))
 
-@router.post("/dub/upload")
-async def dub_upload(video: UploadFile = File(...), job_id: Optional[str] = Form(None)):
-    job_id = job_id or str(uuid.uuid4())[:8]
-    job_dir = _safe_job_dir(job_id)
-    if job_dir is None:
-        raise HTTPException(status_code=400, detail="invalid job_id")
-    os.makedirs(job_dir, exist_ok=True)
-
-    ext = os.path.splitext(video.filename or "video.mp4")[1]
-    video_path = os.path.join(job_dir, f"original{ext}")
-    with open(video_path, "wb") as f:
-        f.write(await video.read())
-
-    audio_path = os.path.join(job_dir, "audio.wav")
-    ffmpeg = find_ffmpeg()
-
+def _run_proc_factory(job_id: str):
+    """Return an async _run_proc helper bound to a job_id (for subprocess tracking)."""
     async def _run_proc(cmd, timeout: float = 900.0):
-        # Gate through the shared ffmpeg semaphore + EAGAIN retry so concurrent
-        # dub uploads can't pile up posix_spawn failures under macOS fd limits.
         async with _get_semaphore():
             p = await _spawn_with_retry(
                 cmd,
@@ -288,108 +272,248 @@ async def dub_upload(video: UploadFile = File(...), job_id: Optional[str] = Form
                         await asyncio.wait_for(p.wait(), timeout=5.0)
                     except asyncio.TimeoutError:
                         pass
+    return _run_proc
 
+
+def _prep_event(event_type: str, **fields) -> str:
+    payload = {"type": event_type, **fields}
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _yt_download_sync(url: str, job_dir: str) -> tuple[str, str]:
+    """Blocking yt-dlp download. Returns (video_path, title)."""
+    import yt_dlp
+    outtmpl = os.path.join(job_dir, "original.%(ext)s")
+    ydl_opts = {
+        "outtmpl": outtmpl,
+        "format": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "restrictfilenames": True,
+        "socket_timeout": 30,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        path = ydl.prepare_filename(info)
+        root, _ = os.path.splitext(path)
+        mp4 = root + ".mp4"
+        if os.path.exists(mp4):
+            return mp4, info.get("title") or os.path.basename(mp4)
+        return path, info.get("title") or os.path.basename(path)
+
+
+async def _ingest_gen(job_id: str, job_dir: str, source: dict, filename_hint: Optional[str] = None):
+    """Async generator: emit SSE events per processing stage.
+
+    Stages: download_start, download_done, extract_start, extract_done, demucs_start,
+    demucs_done, scene_start, scene_done, ready (terminal), error (terminal), cancelled.
+
+    After extract_done the job is queryable via /dub/audio, /dub/media, /dub/thumb.
+    After demucs_done, /dub/download and /dub/preview-video work with bg mix.
+    """
     try:
+        if source.get("kind") == "url":
+            url = source["url"]
+            yield _prep_event("download_start", url=url)
+            try:
+                video_path, title = await asyncio.to_thread(_yt_download_sync, url, job_dir)
+            except Exception as e:
+                yield _prep_event("error", stage="download", error=str(e)[:300])
+                shutil.rmtree(job_dir, ignore_errors=True)
+                return
+            filename = title or os.path.basename(video_path)
+            try:
+                size = os.path.getsize(video_path)
+            except OSError:
+                size = 0
+            yield _prep_event("download_done", title=title, size=size, filename=filename)
+        else:
+            video_path = source["path"]
+            filename = filename_hint or os.path.basename(video_path)
+
+        audio_path = os.path.join(job_dir, "audio.wav")
+        ffmpeg = find_ffmpeg()
+        _run_proc = _run_proc_factory(job_id)
+
+        yield _prep_event("extract_start")
         try:
             p, _, stderr = await _run_proc([
                 ffmpeg, "-i", video_path, "-vn", "-acodec", "pcm_s16le",
                 "-ar", "16000", "-ac", "1", audio_path, "-y",
             ])
             if p.returncode != 0:
-                raise Exception(stderr.decode())
-        except HTTPException:
+                raise Exception(stderr.decode(errors="replace")[:500])
+        except asyncio.CancelledError:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"ffmpeg failed: {str(e)}")
+            yield _prep_event("error", stage="extract", error=str(e)[:300])
+            return
 
         try:
             dur = float(sf.info(audio_path).frames) / float(sf.info(audio_path).samplerate)
         except Exception:
             dur = 0.0
 
-        vocals_path = os.path.join(job_dir, "vocals.wav")
-        no_vocals_path = os.path.join(job_dir, "no_vocals.wav")
-        scene_cuts = []
-
-        async def run_demucs():
-            nonlocal vocals_path, no_vocals_path
-            try:
-                demucs_cmd = [sys.executable, "-m", "demucs.separate",
-                              "--two-stems", "vocals", "-n", "htdemucs", "-d", get_best_device(),
-                              audio_path, "-o", job_dir]
-                p, _, stderr = await _run_proc(demucs_cmd, timeout=1800.0)
-                if p.returncode != 0:
-                    raise Exception(stderr.decode())
-
-                demucs_out = os.path.join(job_dir, "htdemucs", "audio")
-                if os.path.exists(os.path.join(demucs_out, "vocals.wav")):
-                    shutil.move(os.path.join(demucs_out, "vocals.wav"), vocals_path)
-                    shutil.move(os.path.join(demucs_out, "no_vocals.wav"), no_vocals_path)
-                    shutil.rmtree(os.path.join(job_dir, "htdemucs"), ignore_errors=True)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.warning(f"Demucs failed, falling back to mixed audio. {e}")
-                vocals_path = audio_path
-                no_vocals_path = None
-
-        async def run_scene_detection():
-            nonlocal scene_cuts
-            try:
-                p, _, stderr_scene = await _run_proc([
-                    ffmpeg, "-i", video_path, "-filter:v",
-                    "select='gt(scene,0.3)',showinfo", "-f", "null", "-",
-                ], timeout=600.0)
-                import re
-                matches = re.finditer(r"pts_time:([\d\.]+)", stderr_scene.decode())
-                scene_cuts = [float(m.group(1)) for m in matches]
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.warning(f"Scene detection failed: {e}")
-
-        async def run_thumbnail():
-            thumb_path = os.path.join(job_dir, "thumb.jpg")
-            # Pick a frame ~1s in (or 10% mark for short videos), scale to 320px wide.
-            offset = max(0.5, min(1.5, dur * 0.1)) if dur else 1.0
-            try:
-                await _run_proc([
-                    ffmpeg, "-y", "-ss", f"{offset:.2f}", "-i", video_path,
-                    "-vframes", "1", "-vf", "scale=320:-2",
-                    "-q:v", "4", thumb_path,
-                ], timeout=30.0)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.warning(f"Thumbnail extraction failed: {e}")
-
-        await asyncio.gather(run_demucs(), run_scene_detection(), run_thumbnail())
-
-        thumb_path = os.path.join(job_dir, "thumb.jpg")
-        _dub_jobs[job_id] = {
+        # Persist partial job so media/audio endpoints resolve even before Demucs finishes.
+        partial = {
             "video_path": video_path,
             "audio_path": audio_path,
+            "vocals_path": audio_path,  # fallback until demucs completes
+            "no_vocals_path": None,
+            "thumb_path": None,
+            "duration": dur,
+            "filename": filename,
+            "segments": None,
+            "dubbed_tracks": {},
+            "scene_cuts": [],
+        }
+        _dub_jobs[job_id] = partial
+        _save_job(job_id, partial, filename, dur)
+        yield _prep_event("extract_done", job_id=job_id, duration=round(dur, 2), filename=filename)
+
+        vocals_path = os.path.join(job_dir, "vocals.wav")
+        no_vocals_path = os.path.join(job_dir, "no_vocals.wav")
+        scene_cuts: list = []
+
+        yield _prep_event("demucs_start")
+        try:
+            demucs_cmd = [sys.executable, "-m", "demucs.separate",
+                          "--two-stems", "vocals", "-n", "htdemucs", "-d", get_best_device(),
+                          audio_path, "-o", job_dir]
+            p, _, stderr = await _run_proc(demucs_cmd, timeout=1800.0)
+            if p.returncode != 0:
+                raise Exception(stderr.decode(errors="replace")[:500])
+            demucs_out = os.path.join(job_dir, "htdemucs", "audio")
+            if os.path.exists(os.path.join(demucs_out, "vocals.wav")):
+                shutil.move(os.path.join(demucs_out, "vocals.wav"), vocals_path)
+                shutil.move(os.path.join(demucs_out, "no_vocals.wav"), no_vocals_path)
+                shutil.rmtree(os.path.join(job_dir, "htdemucs"), ignore_errors=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Demucs failed for %s, falling back to mixed audio: %s", job_id, e)
+            vocals_path = audio_path
+            no_vocals_path = None
+        yield _prep_event("demucs_done", has_bg=bool(no_vocals_path and os.path.exists(no_vocals_path)))
+
+        yield _prep_event("scene_start")
+        try:
+            p, _, stderr_scene = await _run_proc([
+                ffmpeg, "-i", video_path, "-filter:v",
+                "select='gt(scene,0.3)',showinfo", "-f", "null", "-",
+            ], timeout=600.0)
+            import re
+            matches = re.finditer(r"pts_time:([\d\.]+)", stderr_scene.decode(errors="replace"))
+            scene_cuts = [float(m.group(1)) for m in matches]
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Scene detection failed for %s: %s", job_id, e)
+        yield _prep_event("scene_done", count=len(scene_cuts))
+
+        thumb_path = os.path.join(job_dir, "thumb.jpg")
+        offset = max(0.5, min(1.5, dur * 0.1)) if dur else 1.0
+        try:
+            await _run_proc([
+                ffmpeg, "-y", "-ss", f"{offset:.2f}", "-i", video_path,
+                "-vframes", "1", "-vf", "scale=320:-2",
+                "-q:v", "4", thumb_path,
+            ], timeout=30.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Thumbnail extraction failed for %s: %s", job_id, e)
+
+        _dub_jobs[job_id].update({
             "vocals_path": vocals_path,
             "no_vocals_path": no_vocals_path,
             "thumb_path": thumb_path if os.path.exists(thumb_path) else None,
-            "duration": dur, "filename": video.filename,
-            "segments": None, "dubbed_tracks": {},
             "scene_cuts": scene_cuts,
-        }
-        _save_job(job_id, _dub_jobs[job_id], video.filename, dur)
-        return {"job_id": job_id, "duration": round(dur, 2), "filename": video.filename}
+        })
+        _save_job(job_id, _dub_jobs[job_id], filename, dur)
+        yield _prep_event("ready", job_id=job_id, duration=round(dur, 2), filename=filename)
 
     except asyncio.CancelledError:
-        logger.info("Dub upload cancelled for job %s; killing subprocesses and cleaning up", job_id)
+        logger.info("Dub prep cancelled for job %s; killing subprocesses and cleaning up", job_id)
         _kill_job_procs(job_id)
         try:
             shutil.rmtree(job_dir, ignore_errors=True)
         finally:
             _dub_jobs.pop(job_id, None)
+        yield _prep_event("cancelled")
         raise
     finally:
         with _active_procs_lock:
             _active_procs.pop(job_id, None)
+
+
+@router.post("/dub/upload")
+async def dub_upload(video: UploadFile = File(...), job_id: Optional[str] = Form(None)):
+    """Accept video upload, write to disk, queue background prep task.
+
+    Returns 202 with {job_id, task_id, filename}. Client should open SSE on
+    /tasks/stream/{task_id} to monitor extract/demucs/scene stages and wait for
+    the 'ready' event before starting transcription.
+    """
+    job_id = job_id or str(uuid.uuid4())[:8]
+    job_dir = _safe_job_dir(job_id)
+    if job_dir is None:
+        raise HTTPException(status_code=400, detail="invalid job_id")
+    os.makedirs(job_dir, exist_ok=True)
+
+    ext = os.path.splitext(video.filename or "video.mp4")[1]
+    video_path = os.path.join(job_dir, f"original{ext}")
+    with open(video_path, "wb") as f:
+        f.write(await video.read())
+
+    filename = video.filename or f"video{ext}"
+    task_id = f"prep_{job_id}"
+    await task_manager.add_task(
+        task_id, "prep",
+        _ingest_gen, job_id, job_dir,
+        {"kind": "file", "path": video_path}, filename,
+    )
+    return JSONResponse(
+        status_code=202,
+        content={"job_id": job_id, "task_id": task_id, "filename": filename},
+    )
+
+
+@router.post("/dub/ingest-url")
+async def dub_ingest_url(req: DubIngestUrlRequest):
+    """Ingest a remote video URL via yt-dlp. Queues background prep task.
+
+    Returns 202 immediately with {job_id, task_id}. All work (download,
+    audio extract, Demucs, scene detect, thumbnail) happens in the background
+    task and progress is streamed via /tasks/stream/{task_id}.
+    """
+    url = (req.url or "").strip()
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="invalid url")
+
+    try:
+        import yt_dlp  # noqa: F401
+    except ImportError:
+        raise HTTPException(status_code=500, detail="yt-dlp not installed")
+
+    job_id = req.job_id or str(uuid.uuid4())[:8]
+    job_dir = _safe_job_dir(job_id)
+    if job_dir is None:
+        raise HTTPException(status_code=400, detail="invalid job_id")
+    os.makedirs(job_dir, exist_ok=True)
+
+    task_id = f"prep_{job_id}"
+    await task_manager.add_task(
+        task_id, "prep",
+        _ingest_gen, job_id, job_dir,
+        {"kind": "url", "url": url}, None,
+    )
+    return JSONResponse(
+        status_code=202,
+        content={"job_id": job_id, "task_id": task_id, "filename": ""},
+    )
 
 
 TRANSCRIBE_CHUNK_S = float(os.environ.get("OMNIVOICE_TRANSCRIBE_CHUNK_S", "30.0"))

@@ -1,7 +1,7 @@
-import React, { Suspense, lazy } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import {
   PanelLeftOpen, PanelLeftClose, Film, Save, UploadCloud, Sparkles, Loader, Square,
-  FileText, Play, DownloadIcon, Volume2, Music, Package, Layers,
+  FileText, Play, DownloadIcon, Volume2, Music, Package, Layers, Link2,
   Languages, ChevronDown, ChevronUp, Wand2, Trash2, Check, Globe, UserSquare2, User,
 } from 'lucide-react';
 // lucide-react exports DownloadIcon as "Download"; alias here to match App.jsx naming.
@@ -23,7 +23,7 @@ const LazyFallback = () => (
 export default function DubTab(props) {
   const {
     // State
-    dubJobId, dubStep, dubVideoFile, dubFilename, dubDuration, dubSegments, dubTranscript,
+    dubJobId, dubStep, dubPrepStage, dubVideoFile, dubFilename, dubDuration, dubSegments, dubTranscript,
     dubLang, dubLangCode, dubInstruct, dubTracks, dubError, dubProgress, dubLocalBlobUrl,
     activeProjectName,
     isSidebarCollapsed, setIsSidebarCollapsed,
@@ -39,7 +39,7 @@ export default function DubTab(props) {
     setDubVideoFile, setDubStep, setDubLocalBlobUrl, setDubSegments,
     setDubLang, setDubLangCode, setDubInstruct,
     // Handlers
-    handleDubAbort, handleDubUpload, handleDubStop, handleDubGenerate,
+    handleDubAbort, handleDubUpload, handleDubIngestUrl, handleDubStop, handleDubGenerate,
     handleDubDownload, handleDubAudioDownload,
     handleSegmentPreview, handleTranslateAll, handleCleanupSegments,
     triggerDownload, fileToMediaUrl,
@@ -50,6 +50,17 @@ export default function DubTab(props) {
   } = props;
 
   const showIdleSkeleton = !(dubJobId && (dubStep === 'editing' || dubStep === 'generating' || dubStep === 'done'));
+  const [ingestUrl, setIngestUrl] = useState('');
+  const [previewMode, setPreviewMode] = useState('original'); // 'original' | 'dubbed'
+  const onIngestUrl = () => {
+    if (!ingestUrl.trim() || !handleDubIngestUrl) return;
+    handleDubIngestUrl(ingestUrl.trim());
+    setIngestUrl('');
+  };
+  const hasDubbedTrack = dubStep === 'done' && dubLangCode && dubLangCode !== 'und' && (dubTracks?.length > 0 || !!dubTracks);
+  const videoSrc = (previewMode === 'dubbed' && hasDubbedTrack)
+    ? `${API}/dub/preview-video/${dubJobId}?lang=${encodeURIComponent(dubLangCode)}&preserve_bg=${preserveBg ? 1 : 0}`
+    : `${API}/dub/media/${dubJobId}`;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -94,7 +105,24 @@ export default function DubTab(props) {
                       dubStep === 'uploading' ? (
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
                           <Loader className="spinner" size={20} color="#d3869b" />
-                          <span style={{ color: '#ebdbb2', fontWeight: 500, fontSize: '0.85rem' }}>Extracting audio…</span>
+                          <span style={{ color: '#ebdbb2', fontWeight: 500, fontSize: '0.85rem' }}>
+                            {({
+                              download: 'Downloading video…',
+                              extract: 'Extracting audio…',
+                              demucs: 'Separating vocals / music (Demucs)…',
+                              scene: 'Detecting scene cuts…',
+                            })[dubPrepStage] || 'Preparing…'}
+                          </span>
+                          <div style={{ display: 'flex', gap: 4, fontSize: '0.65rem', color: '#665c54' }}>
+                            {['download','extract','demucs','scene'].map(s => (
+                              <span key={s} style={{
+                                padding: '1px 6px', borderRadius: 2,
+                                background: dubPrepStage === s ? 'rgba(211,134,155,0.2)' : 'rgba(255,255,255,0.03)',
+                                color: dubPrepStage === s ? '#d3869b' : '#504945',
+                                border: `1px solid ${dubPrepStage === s ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.05)'}`,
+                              }}>{s}</span>
+                            ))}
+                          </div>
                           <button onClick={handleDubAbort} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', background: 'rgba(251,73,52,0.15)', border: '1px solid rgba(251,73,52,0.4)', color: '#fb4934', borderRadius: 6, fontSize: '0.75rem', cursor: 'pointer' }}>
                             <Square size={11} /> Stop
                           </button>
@@ -137,6 +165,37 @@ export default function DubTab(props) {
                     </button>
                   </div>
                 </>
+              ) : dubStep === 'uploading' ? (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, border: '2px dashed rgba(211,134,155,0.2)', borderRadius: 8, margin: 4, background: 'rgba(211,134,155,0.03)' }}>
+                  <Loader className="spinner" size={28} color="#d3869b" />
+                  <span style={{ color: '#ebdbb2', fontWeight: 500, fontSize: '0.95rem' }}>
+                    {({
+                      download: 'Downloading video…',
+                      extract: 'Extracting audio…',
+                      demucs: 'Separating vocals / music (Demucs)…',
+                      scene: 'Detecting scene cuts…',
+                    })[dubPrepStage] || 'Preparing…'}
+                  </span>
+                  <div style={{ display: 'flex', gap: 4, fontSize: '0.65rem', color: '#665c54' }}>
+                    {['download','extract','demucs','scene'].map(s => (
+                      <span key={s} style={{
+                        padding: '2px 8px', borderRadius: 3,
+                        background: dubPrepStage === s ? 'rgba(211,134,155,0.2)' : 'rgba(255,255,255,0.03)',
+                        color: dubPrepStage === s ? '#d3869b' : '#504945',
+                        border: `1px solid ${dubPrepStage === s ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.05)'}`,
+                        fontWeight: dubPrepStage === s ? 600 : 400,
+                      }}>{s}</span>
+                    ))}
+                  </div>
+                  {dubPrepStage === 'demucs' && (
+                    <span style={{ fontSize: '0.62rem', color: '#665c54', maxWidth: 320, textAlign: 'center' }}>
+                      Demucs can take several minutes on long videos. Long audio = longer wait.
+                    </span>
+                  )}
+                  <button onClick={handleDubAbort} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', background: 'rgba(251,73,52,0.15)', border: '1px solid rgba(251,73,52,0.4)', color: '#fb4934', borderRadius: 6, fontSize: '0.75rem', cursor: 'pointer' }}>
+                    <Square size={11} /> Stop
+                  </button>
+                </div>
               ) : (
                 <label htmlFor="video-upload" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, cursor: 'pointer', border: '2px dashed rgba(255,255,255,0.06)', borderRadius: 8, transition: 'all 0.3s', margin: 4 }}
                   onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = '#d3869b'; e.currentTarget.style.background = 'rgba(211,134,155,0.05)'; }}
@@ -158,6 +217,29 @@ export default function DubTab(props) {
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: '0.9rem', color: '#ebdbb2', fontWeight: 500, marginBottom: 4 }}>Drop video here</div>
                     <div style={{ fontSize: '0.7rem', color: '#665c54' }}>MP4 · MOV · MKV · WEBM</div>
+                  </div>
+                  <div
+                    style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '6px 10px', marginTop: 10, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 6, width: 'min(420px, 80%)' }}
+                    onClick={e => e.preventDefault()}
+                  >
+                    <Link2 size={13} color="#a89984" />
+                    <input
+                      type="text"
+                      placeholder="…or paste YouTube / video URL"
+                      value={ingestUrl}
+                      onChange={e => setIngestUrl(e.target.value)}
+                      onClick={e => { e.preventDefault(); e.stopPropagation(); }}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); onIngestUrl(); } }}
+                      style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#ebdbb2', fontSize: '0.75rem' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={e => { e.preventDefault(); e.stopPropagation(); onIngestUrl(); }}
+                      disabled={!ingestUrl.trim()}
+                      style={{ padding: '3px 10px', background: ingestUrl.trim() ? 'rgba(211,134,155,0.15)' : 'rgba(255,255,255,0.03)', border: `1px solid ${ingestUrl.trim() ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.06)'}`, color: ingestUrl.trim() ? '#d3869b' : '#665c54', borderRadius: 4, fontSize: '0.7rem', cursor: ingestUrl.trim() ? 'pointer' : 'default' }}
+                    >
+                      Ingest
+                    </button>
                   </div>
                 </label>
               )}
@@ -281,9 +363,32 @@ export default function DubTab(props) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, flex: 1, minHeight: 0 }}>
             {/* LEFT: Waveform + Video */}
             <div className="studio-panel" style={{ marginBottom: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              {hasDubbedTrack && (
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '4px 6px', background: 'rgba(255,255,255,0.02)', borderRadius: 4, marginBottom: 4, flexShrink: 0 }}>
+                  <span style={{ fontSize: '0.62rem', color: '#665c54', fontWeight: 600, marginRight: 4 }}>PREVIEW</span>
+                  <button
+                    onClick={() => setPreviewMode('original')}
+                    style={{ padding: '2px 8px', fontSize: '0.65rem', border: `1px solid ${previewMode === 'original' ? 'rgba(211,134,155,0.4)' : 'rgba(255,255,255,0.08)'}`, background: previewMode === 'original' ? 'rgba(211,134,155,0.15)' : 'transparent', color: previewMode === 'original' ? '#d3869b' : '#a89984', borderRadius: 3, cursor: 'pointer' }}
+                  >
+                    Original
+                  </button>
+                  <button
+                    onClick={() => setPreviewMode('dubbed')}
+                    style={{ padding: '2px 8px', fontSize: '0.65rem', border: `1px solid ${previewMode === 'dubbed' ? 'rgba(184,187,38,0.4)' : 'rgba(255,255,255,0.08)'}`, background: previewMode === 'dubbed' ? 'rgba(184,187,38,0.12)' : 'transparent', color: previewMode === 'dubbed' ? '#b8bb26' : '#a89984', borderRadius: 3, cursor: 'pointer' }}
+                  >
+                    Dubbed ({dubLangCode})
+                  </button>
+                  {previewMode === 'dubbed' && (
+                    <span style={{ fontSize: '0.6rem', color: '#665c54', marginLeft: 'auto' }}>
+                      first play may take a moment to mux
+                    </span>
+                  )}
+                </div>
+              )}
               <WaveformTimeline
+                key={videoSrc}
                 audioSrc={`${API}/dub/audio/${dubJobId}`}
-                videoSrc={`${API}/dub/media/${dubJobId}`}
+                videoSrc={videoSrc}
                 segments={dubSegments}
                 onSegmentsChange={setDubSegments}
                 disabled={dubStep === 'generating' || dubStep === 'stopping'}
