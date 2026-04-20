@@ -16,13 +16,22 @@ router = APIRouter()
 def _safe_destination(raw: str) -> str:
     """Resolve + validate an export destination. Rejects relative/empty paths."""
     if not raw or not raw.strip():
-        raise HTTPException(status_code=400, detail="destination_path required")
+        raise HTTPException(
+            status_code=400,
+            detail="Export needs a destination folder. Pick where the file should go and try again.",
+        )
     dest = os.path.realpath(os.path.expanduser(raw))
     if not os.path.isabs(dest):
-        raise HTTPException(status_code=400, detail="destination_path must be absolute")
+        raise HTTPException(
+            status_code=400,
+            detail="The destination needs to be a full path (e.g. /Users/you/Movies/OmniVoice) — not relative.",
+        )
     parent = os.path.dirname(dest)
     if not parent or not os.path.isdir(parent):
-        raise HTTPException(status_code=400, detail="destination directory does not exist")
+        raise HTTPException(
+            status_code=400,
+            detail="That destination folder doesn't exist yet. Create it first, or pick an existing one.",
+        )
     return dest
 
 
@@ -30,13 +39,19 @@ def _safe_source(filename: str) -> str:
     """Resolve a source filename against OUTPUTS_DIR / dub outputs, blocking traversal."""
     base = os.path.basename(filename or "")
     if not base or base != filename:
-        raise HTTPException(status_code=400, detail="invalid source_filename")
+        raise HTTPException(
+            status_code=400,
+            detail="The file to export has an unexpected name. Try re-generating the audio and exporting again.",
+        )
     for root in (OUTPUTS_DIR, os.path.join("dub", "outputs")):
         candidate = os.path.realpath(os.path.join(root, base))
         root_real = os.path.realpath(root)
         if candidate.startswith(root_real + os.sep) and os.path.exists(candidate):
             return candidate
-    raise HTTPException(status_code=404, detail="Source file not found")
+    raise HTTPException(
+        status_code=404,
+        detail="That file isn't on disk anymore — it may have been cleaned up. Regenerate and try again.",
+    )
 
 
 @router.post("/export")
@@ -90,10 +105,16 @@ def get_export_history():
 def reveal_in_folder(req: RevealRequest):
     # Tauri/native dialog-provided path; subprocess uses list args (no shell interpolation).
     if not req.path or not req.path.strip():
-        raise HTTPException(status_code=400, detail="path required")
+        raise HTTPException(
+            status_code=400,
+            detail="No path was provided — nothing to reveal.",
+        )
     target = os.path.realpath(os.path.expanduser(req.path))
     if not os.path.exists(target):
-        raise HTTPException(status_code=404, detail="path not found")
+        raise HTTPException(
+            status_code=404,
+            detail="That file or folder is no longer on disk. It may have been moved or deleted.",
+        )
 
     folder = target if os.path.isdir(target) else os.path.dirname(target)
     system = platform.system()

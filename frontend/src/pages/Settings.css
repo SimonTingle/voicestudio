@@ -1,0 +1,37 @@
+/* Settings page — page-specific styles layered over the design system. */
+
+.settings-row__mono     { font-family: var(--font-mono); }
+.settings-muted         { color: var(--color-fg-subtle); font-size: var(--text-md); }
+.settings-prose         { margin: 0 0 var(--space-5); color: var(--color-fg-muted); line-height: 1.6; font-size: var(--text-lg); }
+.settings-prose strong  { color: #f5e6c5; }
+
+.settings-section__head-row     { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+.settings-section__head-left    { display: flex; align-items: center; gap: var(--space-4); }
+.settings-section__head-actions { display: flex; gap: var(--space-3); }
+
+.settings-log-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-base);
+  color: var(--color-fg-subtle);
+  margin: var(--space-4) 0;
+  font-family: var(--font-mono);
+}
+
+.settings-log__empty {
+  color: var(--color-fg-subtle);
+  font-style: italic;
+}
+
+.settings-link-row {
+  margin-top: var(--space-5);
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+/* We're migrating to the ui/ Tabs primitive — keep a thin class so the old
+   .settings-tabs gradient-above space stays; the Tabs primitive itself
+   carries visual styling. */
+.settings-tabs-ui { margin-bottom: var(--space-5); }

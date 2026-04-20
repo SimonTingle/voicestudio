@@ -86,13 +86,22 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_dialog::init())?;
             app.handle()
                 .plugin(tauri_plugin_window_state::Builder::default().build())?;
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            // Always-on log file at the OS log-dir so the Settings UI > Logs > Tauri
+            // tab has something to read in both dev and production builds.
+            // macOS: ~/Library/Logs/<bundle_id>/tauri.log
+            // linux: ~/.local/share/<bundle_id>/logs/tauri.log
+            // win:   %APPDATA%/<bundle_id>/logs/tauri.log
+            app.handle().plugin(
+                tauri_plugin_log::Builder::new()
+                    .level(log::LevelFilter::Info)
+                    .targets([
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                            file_name: Some("tauri".into()),
+                        }),
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    ])
+                    .build(),
+            )?;
 
             // Only spawn if the backend isn't already running (e.g. manual `uv run`)
             let skip_spawn = std::env::var("TAURI_SKIP_BACKEND").is_ok() || port_in_use(8000);

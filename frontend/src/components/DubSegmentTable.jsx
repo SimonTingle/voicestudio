@@ -1,10 +1,21 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { List } from 'react-window';
-import { Search, X } from 'lucide-react';
 import DubSegmentRow from './DubSegmentRow';
+import { Table, Select } from '../ui';
+import './DubSegmentTable.css';
 
 const BASE_ROW_HEIGHT = 28;
 const ROW_HEIGHT_WITH_ORIG = 44;
+
+const COLUMNS = [
+  { key: 'time',  label: 'Time',  width: 55 },
+  { key: 'spkr',  label: 'Spkr',  width: 50 },
+  { key: 'text',  label: 'Text',  flex: 1 },
+  { key: 'lang',  label: 'Lang',  width: 45 },
+  { key: 'voice', label: 'Voice', width: 90 },
+  { key: 'vol',   label: 'Vol',   width: 30, title: 'Volume (0–200%)' },
+  { key: 'act',   label: '',      width: 54 },
+];
 
 export default function DubSegmentTable({
   segments, profiles, dubStep, dubProgress, previewLoadingId,
@@ -66,67 +77,50 @@ export default function DubSegmentTable({
   }, []);
 
   const allFilteredSelected = filtered.length > 0 && filtered.every(s => selectedIds && selectedIds.has(s.id));
+  const selCount = selectedIds?.size ?? 0;
+  const meta = (
+    <>
+      {filtered.length}/{segments.length}
+      {selCount > 0 && <span className="dub-segment-table__sel-count"> · {selCount} sel</span>}
+    </>
+  );
 
   return (
-    <div className="segment-table" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      {/* Search / filter bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(0,0,0,0.15)' }}>
-        <div style={{ position: 'relative', flex: 1, minWidth: 120 }}>
-          <Search size={10} style={{ position: 'absolute', left: 6, top: '50%', transform: 'translateY(-50%)', color: '#6b6657' }} />
-          <input
-            className="input-base"
-            placeholder="Search text…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            style={{ width: '100%', fontSize: '0.64rem', padding: '3px 6px 3px 20px' }}
-          />
-          {query && (
-            <button
-              onClick={() => setQuery('')}
-              style={{ position: 'absolute', right: 2, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#6b6657', cursor: 'pointer' }}
-            >
-              <X size={10} />
-            </button>
-          )}
-        </div>
+    <Table className="segment-table">
+      <Table.Toolbar
+        search={query}
+        onSearch={setQuery}
+        searchPlaceholder="Search text…"
+        meta={meta}
+      >
         {speakers.length > 1 && (
-          <select
-            className="input-base"
+          <Select
+            size="sm"
             value={speakerFilter}
             onChange={(e) => setSpeakerFilter(e.target.value)}
-            style={{ fontSize: '0.62rem', padding: '3px 4px', minWidth: 80 }}
+            className="dub-segment-table__spk-filter"
           >
             <option value="">All speakers</option>
             {speakers.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+          </Select>
         )}
-        <span style={{ fontSize: '0.62rem', color: '#6b6657', whiteSpace: 'nowrap' }}>
-          {filtered.length}/{segments.length}
-          {selectedIds && selectedIds.size > 0 && (
-            <span style={{ color: '#d3869b', marginLeft: 4 }}>· {selectedIds.size} sel</span>
-          )}
-        </span>
-      </div>
+      </Table.Toolbar>
 
-      <div className="segment-header">
-        <span style={{ width: 18 }}>
-          <input
-            type="checkbox"
-            checked={allFilteredSelected}
-            onChange={(e) => e.target.checked ? onSelectAll(filtered) : onClearSelection()}
-            style={{ accentColor: '#d3869b', cursor: 'pointer' }}
-            title="Select all filtered"
-          />
-        </span>
-        <span style={{ width: 55 }}>Time</span>
-        <span style={{ width: 50 }}>Spkr</span>
-        <span style={{ flex: 1 }}>Text</span>
-        <span style={{ width: 45 }}>Lang</span>
-        <span style={{ width: 90 }}>Voice</span>
-        <span style={{ width: 30 }} title="Volume (0-200%)">Vol</span>
-        <span style={{ width: 62 }}></span>
-      </div>
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <Table.Header
+        columns={COLUMNS}
+        leading={
+          <span className="dub-segment-table__select-all">
+            <input
+              type="checkbox"
+              checked={allFilteredSelected}
+              onChange={(e) => e.target.checked ? onSelectAll(filtered) : onClearSelection()}
+              title="Select all filtered"
+            />
+          </span>
+        }
+      />
+
+      <div className="dub-segment-table__body">
         <List
           rowCount={filtered.length}
           rowHeight={rowHeight}
@@ -136,6 +130,6 @@ export default function DubSegmentTable({
           style={{ height: '100%', width: '100%' }}
         />
       </div>
-    </div>
+    </Table>
   );
 }

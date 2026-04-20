@@ -1,0 +1,142 @@
+/* Sidebar — page-specific layout + accents, base comes from ui/ primitives. */
+
+.sidebar               { display: flex; flex-direction: column; }
+
+.sidebar__tabs {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--glass-border);
+  background: rgba(0, 0, 0, 0.15);
+  flex-shrink: 0;
+  justify-content: center;
+}
+.sidebar.is-collapsed .sidebar__tabs { flex-direction: column; }
+
+.sidebar__tab {
+  flex: 1;
+  height: 26px;
+  max-width: 60px;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--color-fg-muted);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--dur-base), background var(--dur-base), color var(--dur-base);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  --sidebar-tab-accent: var(--color-brand);
+}
+.sidebar.is-collapsed .sidebar__tab { max-width: 100%; }
+.sidebar__tab.is-active {
+  border-color: color-mix(in srgb, var(--sidebar-tab-accent) 35%, transparent);
+  background:   color-mix(in srgb, var(--sidebar-tab-accent) 15%, transparent);
+  color: var(--sidebar-tab-accent);
+}
+.sidebar__tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ── Search ─────────────────────────────────────────────────── */
+.sidebar__search {
+  padding: 6px 8px 2px 8px;
+  flex-shrink: 0;
+  position: relative;
+}
+.sidebar__search-icon {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-fg-subtle);
+  pointer-events: none;
+}
+.sidebar__search-input {
+  width: 100%;
+  font-size: var(--text-sm);
+  padding: 4px 26px 4px 22px;
+  border-radius: var(--radius-pill);
+}
+.sidebar__search-clear {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent !important;
+  border: none !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+
+/* ── Save-project button tint ───────────────────────────────── */
+.sidebar__save-btn           { margin-bottom: var(--space-4); color: var(--color-info); border-color: rgba(131,165,152,0.30); background: rgba(131,165,152,0.15); }
+.sidebar__save-btn.is-active-project { color: #b8bb26;           border-color: rgba(184,187,38,0.35); background: rgba(184,187,38,0.15); }
+.sidebar__save-btn--full     { justify-content: center; }
+
+/* ── Clear-history row ──────────────────────────────────────── */
+.sidebar__clear { margin-top: var(--space-5); color: var(--color-fg-subtle); opacity: 0.7; }
+.sidebar__clear:hover { opacity: 1; }
+
+/* ── Empty-state placeholders ───────────────────────────────── */
+.sidebar__empty {
+  color: var(--color-fg-muted);
+  text-align: center;
+  padding: 24px 12px;
+}
+.sidebar__empty-icon   { opacity: 0.3; margin-bottom: var(--space-4); }
+.sidebar__empty-title  { font-size: var(--text-md); margin: 0 0 var(--space-2); }
+.sidebar__empty-sub    { font-size: var(--text-xs); margin: 0; opacity: 0.6; }
+
+.sidebar__section-title {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-4);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+/* ── Collapsed-mode hand-drawn icon tiles ───────────────────── */
+.sidebar__icon-tile {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 12px 16px 10px 18px / 14px 10px 16px 12px;
+  cursor: pointer;
+  position: relative;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  color: var(--color-fg-muted);
+  transition:
+    transform var(--dur-base) var(--ease-spring),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.sidebar__icon-tile:hover {
+  transform: rotate(0deg) scale(1.08) !important;
+}
+.sidebar__icon-tile.is-active {
+  background: linear-gradient(140deg, rgba(243, 165, 182, 0.25), rgba(250, 189, 47, 0.15));
+  border-color: rgba(243, 165, 182, 0.4);
+  color: #fff9ef;
+}
+.sidebar__icon-tile__lock {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  color: #b8bb26;
+}
+
+/* Generic small dot at top of history list */
+.sidebar__subtitle {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-4);
+}

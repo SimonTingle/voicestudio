@@ -2,7 +2,7 @@ import React, { Suspense, lazy, useState } from 'react';
 import {
   PanelLeftOpen, PanelLeftClose, Film, Save, UploadCloud, Sparkles, Loader, Square,
   FileText, Play, DownloadIcon, Volume2, Music, Package, Layers, Link2,
-  Languages, ChevronDown, ChevronUp, Wand2, Trash2, Check, Globe, UserSquare2, User,
+  Languages, ChevronDown, ChevronUp, Wand2, Trash2, Check, Globe, UserSquare2, User, AlertCircle,
 } from 'lucide-react';
 // lucide-react exports DownloadIcon as "Download"; alias here to match App.jsx naming.
 import { Download as Download } from 'lucide-react';
@@ -13,6 +13,8 @@ import { POPULAR_LANGS, POPULAR_ISO, PRESETS } from '../utils/constants';
 import { LANG_CODES } from '../utils/languages';
 import { formatTime } from '../utils/format';
 import { API } from '../api/client';
+import { Button, Segmented, Badge, Progress } from '../ui';
+import './DubTab.css';
 
 const DubSegmentTable = lazy(() => import('../components/DubSegmentTable'));
 
@@ -68,24 +70,25 @@ export default function DubTab(props) {
       {showIdleSkeleton && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {/* Header bar */}
-          <div className="studio-panel" style={{ padding: '4px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-            <div className="label-row" style={{ marginBottom: 0, alignItems: 'center' }}>
-              <button
+          <div className="studio-panel dub-head">
+            <div className="label-row dub-head__title">
+              <Button
+                variant="icon"
+                iconSize="sm"
+                active={isSidebarCollapsed}
                 onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '3px', marginRight: '6px', background: isSidebarCollapsed ? 'rgba(211,134,155,0.1)' : 'rgba(255,255,255,0.05)', border: `1px solid ${isSidebarCollapsed ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.08)'}`, color: isSidebarCollapsed ? '#d3869b' : '#a89984', borderRadius: 4, cursor: 'pointer' }}
                 title="Toggle Sidebar"
               >
                 {isSidebarCollapsed ? <PanelLeftOpen size={12} /> : <PanelLeftClose size={12} />}
-              </button>
-              <Film className="label-icon" size={11} /> <span style={{ fontWeight: 600 }}>{dubVideoFile ? dubVideoFile.name : 'Video Dubbing Studio'}</span>
-              {dubVideoFile && <span style={{ color: '#a89984', fontWeight: 400 }}> · {(dubVideoFile.size / 1024 / 1024).toFixed(1)} MB</span>}
-              {activeProjectName && <span style={{ color: '#b8bb26', marginLeft: 6 }}>— {activeProjectName}</span>}
+              </Button>
+              <Film className="label-icon" size={11} />
+              <span className="dub-head__filename">{dubVideoFile ? dubVideoFile.name : 'Video Dubbing Studio'}</span>
+              {dubVideoFile && <span className="dub-head__meta">· {(dubVideoFile.size / 1024 / 1024).toFixed(1)} MB</span>}
+              {activeProjectName && <span className="dub-head__project">— {activeProjectName}</span>}
             </div>
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              <button disabled style={{ background: 'none', border: '1px solid rgba(184,187,38,0.15)', color: '#665c54', fontSize: '0.62rem', padding: '2px 6px', borderRadius: 3, cursor: 'default', display: 'flex', alignItems: 'center', gap: 3 }}>
-                <Save size={9} /> Save
-              </button>
-              <button disabled style={{ background: 'none', border: '1px solid rgba(251,73,52,0.12)', color: '#665c54', fontSize: '0.62rem', padding: '2px 6px', borderRadius: 3, cursor: 'default' }}>Reset</button>
+            <div className="dub-head__actions">
+              <Button variant="subtle" size="sm" disabled leading={<Save size={9} />}>Save</Button>
+              <Button variant="ghost"  size="sm" disabled>Reset</Button>
             </div>
           </div>
 
@@ -103,58 +106,13 @@ export default function DubTab(props) {
                     disabled={true}
                     overlayContent={
                       dubStep === 'uploading' ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                          <Loader className="spinner" size={20} color="#d3869b" />
-                          <span style={{ color: '#ebdbb2', fontWeight: 500, fontSize: '0.85rem' }}>
-                            {({
-                              download: 'Downloading video…',
-                              extract: 'Extracting audio…',
-                              demucs: 'Separating vocals / music (Demucs)…',
-                              scene: 'Detecting scene cuts…',
-                              cached: '⚡ Using cached results…',
-                            })[dubPrepStage] || 'Preparing…'}
-                          </span>
-                          <div style={{ display: 'flex', gap: 4, fontSize: '0.65rem', color: '#665c54' }}>
-                            {(dubPrepStage === 'cached' ? ['download','extract','cached'] : ['download','extract','demucs','scene']).map(s => (
-                              <span key={s} style={{
-                                padding: '1px 6px', borderRadius: 2,
-                                background: dubPrepStage === s ? (s === 'cached' ? 'rgba(142,192,124,0.2)' : 'rgba(211,134,155,0.2)') : 'rgba(255,255,255,0.03)',
-                                color: dubPrepStage === s ? (s === 'cached' ? '#8ec07c' : '#d3869b') : '#504945',
-                                border: `1px solid ${dubPrepStage === s ? (s === 'cached' ? 'rgba(142,192,124,0.3)' : 'rgba(211,134,155,0.3)') : 'rgba(255,255,255,0.05)'}`,
-                              }}>{s === 'cached' ? '⚡ cached' : s}</span>
-                            ))}
-                          </div>
-                          {dubPrepStage === 'demucs' && (
-                            <span style={{ fontSize: '0.62rem', color: '#665c54', maxWidth: 320, textAlign: 'center' }}>
-                              Demucs can take several minutes on long videos. Long audio = longer wait.
-                            </span>
-                          )}
-                          <button onClick={handleDubAbort} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', background: 'rgba(251,73,52,0.15)', border: '1px solid rgba(251,73,52,0.4)', color: '#fb4934', borderRadius: 6, fontSize: '0.75rem', cursor: 'pointer' }}>
-                            <Square size={11} /> Stop
-                          </button>
-                        </div>
+                        <PrepOverlay stage={dubPrepStage} onAbort={handleDubAbort} />
                       ) : dubStep === 'transcribing' ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, width: '100%' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <Loader className="spinner" size={18} color="#d3869b" />
-                            <span style={{ color: '#ebdbb2', fontWeight: 500, fontSize: '0.85rem' }}>Transcribing with Whisper…</span>
-                          </div>
-                          <div style={{ display: 'flex', gap: 14, fontSize: '0.78rem', color: '#a89984' }}>
-                            <span>⏱ {Math.floor(transcribeElapsed / 60)}:{String(transcribeElapsed % 60).padStart(2, '0')} elapsed</span>
-                            {dubDuration > 0 && (() => {
-                              const est = Math.max(10, Math.ceil(dubDuration / 60) * 3 + 8);
-                              return <span>~{Math.max(0, est - transcribeElapsed)}s remaining</span>;
-                            })()}
-                          </div>
-                          {dubDuration > 0 && (
-                            <div className="progress-container" style={{ width: '80%', maxWidth: 340 }}>
-                              <div className="progress-fill" style={{ width: `${Math.min(95, (transcribeElapsed / Math.max(10, Math.ceil(dubDuration / 60) * 3 + 8)) * 100)}%` }} />
-                            </div>
-                          )}
-                          <button onClick={handleDubAbort} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', background: 'rgba(251,73,52,0.15)', border: '1px solid rgba(251,73,52,0.4)', color: '#fb4934', borderRadius: 6, fontSize: '0.75rem', cursor: 'pointer' }}>
-                            <Square size={11} /> Stop
-                          </button>
-                        </div>
+                        <TranscribeOverlay
+                          elapsed={transcribeElapsed}
+                          duration={dubDuration}
+                          onAbort={handleDubAbort}
+                        />
                       ) : null
                     }
                   />
@@ -172,37 +130,7 @@ export default function DubTab(props) {
                   </div>
                 </>
               ) : dubStep === 'uploading' ? (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, border: '2px dashed rgba(211,134,155,0.2)', borderRadius: 8, margin: 4, background: 'rgba(211,134,155,0.03)' }}>
-                  <Loader className="spinner" size={28} color="#d3869b" />
-                  <span style={{ color: '#ebdbb2', fontWeight: 500, fontSize: '0.95rem' }}>
-                    {({
-                      download: 'Downloading video…',
-                      extract: 'Extracting audio…',
-                      demucs: 'Separating vocals / music (Demucs)…',
-                      scene: 'Detecting scene cuts…',
-                      cached: '⚡ Using cached results…',
-                    })[dubPrepStage] || 'Preparing…'}
-                  </span>
-                  <div style={{ display: 'flex', gap: 4, fontSize: '0.65rem', color: '#665c54' }}>
-                    {(dubPrepStage === 'cached' ? ['download','extract','cached'] : ['download','extract','demucs','scene']).map(s => (
-                      <span key={s} style={{
-                        padding: '2px 8px', borderRadius: 3,
-                        background: dubPrepStage === s ? (s === 'cached' ? 'rgba(142,192,124,0.2)' : 'rgba(211,134,155,0.2)') : 'rgba(255,255,255,0.03)',
-                        color: dubPrepStage === s ? (s === 'cached' ? '#8ec07c' : '#d3869b') : '#504945',
-                        border: `1px solid ${dubPrepStage === s ? (s === 'cached' ? 'rgba(142,192,124,0.3)' : 'rgba(211,134,155,0.3)') : 'rgba(255,255,255,0.05)'}`,
-                        fontWeight: dubPrepStage === s ? 600 : 400,
-                      }}>{s === 'cached' ? '⚡ cached' : s}</span>
-                    ))}
-                  </div>
-                  {dubPrepStage === 'demucs' && (
-                    <span style={{ fontSize: '0.62rem', color: '#665c54', maxWidth: 320, textAlign: 'center' }}>
-                      Demucs can take several minutes on long videos. Long audio = longer wait.
-                    </span>
-                  )}
-                  <button onClick={handleDubAbort} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', background: 'rgba(251,73,52,0.15)', border: '1px solid rgba(251,73,52,0.4)', color: '#fb4934', borderRadius: 6, fontSize: '0.75rem', cursor: 'pointer' }}>
-                    <Square size={11} /> Stop
-                  </button>
-                </div>
+                <PrepOverlay stage={dubPrepStage} onAbort={handleDubAbort} large />
               ) : (
                 <label htmlFor="video-upload" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, cursor: 'pointer', border: '2px dashed rgba(255,255,255,0.06)', borderRadius: 8, transition: 'all 0.3s', margin: 4 }}
                   onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = '#d3869b'; e.currentTarget.style.background = 'rgba(211,134,155,0.05)'; }}
@@ -346,24 +274,25 @@ export default function DubTab(props) {
       {/* ── After transcription: side-by-side editor ── */}
       {dubJobId && (dubStep === 'editing' || dubStep === 'generating' || dubStep === 'done') && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <div className="studio-panel" style={{ padding: '4px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-            <div className="label-row" style={{ marginBottom: 0, alignItems: 'center' }}>
-              <button
+          <div className="studio-panel dub-head">
+            <div className="label-row dub-head__title">
+              <Button
+                variant="icon"
+                iconSize="sm"
+                active={isSidebarCollapsed}
                 onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '3px', marginRight: '6px', background: isSidebarCollapsed ? 'rgba(211,134,155,0.1)' : 'rgba(255,255,255,0.05)', border: `1px solid ${isSidebarCollapsed ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.08)'}`, color: isSidebarCollapsed ? '#d3869b' : '#a89984', borderRadius: 4, cursor: 'pointer' }}
                 title="Toggle Sidebar"
               >
                 {isSidebarCollapsed ? <PanelLeftOpen size={12} /> : <PanelLeftClose size={12} />}
-              </button>
-              <FileText className="label-icon" size={11} /> <span style={{ fontWeight: 600 }}>{dubFilename}</span>
-              <span style={{ color: '#a89984', fontWeight: 400 }}> · {formatTime(dubDuration)} · {dubSegments.length} segs</span>
-              {activeProjectName && <span style={{ color: '#b8bb26', marginLeft: 6 }}>— {activeProjectName}</span>}
+              </Button>
+              <FileText className="label-icon" size={11} />
+              <span className="dub-head__filename">{dubFilename}</span>
+              <span className="dub-head__meta">· {formatTime(dubDuration)} · {dubSegments.length} segs</span>
+              {activeProjectName && <span className="dub-head__project">— {activeProjectName}</span>}
             </div>
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              <button onClick={saveProject} style={{ background: 'none', border: '1px solid rgba(184,187,38,0.3)', color: '#b8bb26', fontSize: '0.62rem', padding: '2px 6px', borderRadius: 3, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}>
-                <Save size={9} /> Save
-              </button>
-              <button onClick={resetDub} style={{ background: 'none', border: '1px solid rgba(251,73,52,0.25)', color: '#fb4934', fontSize: '0.62rem', padding: '2px 6px', borderRadius: 3, cursor: 'pointer' }}>Reset</button>
+            <div className="dub-head__actions">
+              <Button variant="subtle" size="sm" onClick={saveProject} leading={<Save size={9} />}>Save</Button>
+              <Button variant="danger" size="sm" onClick={resetDub}>Reset</Button>
             </div>
           </div>
 
@@ -371,24 +300,19 @@ export default function DubTab(props) {
             {/* LEFT: Waveform + Video */}
             <div className="studio-panel" style={{ marginBottom: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               {hasDubbedTrack && (
-                <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '4px 6px', background: 'rgba(255,255,255,0.02)', borderRadius: 4, marginBottom: 4, flexShrink: 0 }}>
-                  <span style={{ fontSize: '0.62rem', color: '#665c54', fontWeight: 600, marginRight: 4 }}>PREVIEW</span>
-                  <button
-                    onClick={() => setPreviewMode('original')}
-                    style={{ padding: '2px 8px', fontSize: '0.65rem', border: `1px solid ${previewMode === 'original' ? 'rgba(211,134,155,0.4)' : 'rgba(255,255,255,0.08)'}`, background: previewMode === 'original' ? 'rgba(211,134,155,0.15)' : 'transparent', color: previewMode === 'original' ? '#d3869b' : '#a89984', borderRadius: 3, cursor: 'pointer' }}
-                  >
-                    Original
-                  </button>
-                  <button
-                    onClick={() => setPreviewMode('dubbed')}
-                    style={{ padding: '2px 8px', fontSize: '0.65rem', border: `1px solid ${previewMode === 'dubbed' ? 'rgba(184,187,38,0.4)' : 'rgba(255,255,255,0.08)'}`, background: previewMode === 'dubbed' ? 'rgba(184,187,38,0.12)' : 'transparent', color: previewMode === 'dubbed' ? '#b8bb26' : '#a89984', borderRadius: 3, cursor: 'pointer' }}
-                  >
-                    Dubbed ({dubLangCode})
-                  </button>
+                <div className="dub-preview-toggle">
+                  <span className="dub-preview-toggle__kicker">Preview</span>
+                  <Segmented
+                    size="sm"
+                    value={previewMode}
+                    onChange={setPreviewMode}
+                    items={[
+                      { value: 'original', label: 'Original' },
+                      { value: 'dubbed',   label: `Dubbed (${dubLangCode})` },
+                    ]}
+                  />
                   {previewMode === 'dubbed' && (
-                    <span style={{ fontSize: '0.6rem', color: '#665c54', marginLeft: 'auto' }}>
-                      first play may take a moment to mux
-                    </span>
+                    <span className="dub-preview-toggle__hint">first play may take a moment to mux</span>
                   )}
                 </div>
               )}
@@ -409,8 +333,12 @@ export default function DubTab(props) {
                     </div>
                     {dubStep === 'generating' && (
                       <>
-                        <div className="progress-container" style={{ width: '80%', maxWidth: 240 }}>
-                          <div className="progress-fill" style={{ width: `${dubProgress.total ? (dubProgress.current / dubProgress.total) * 100 : 0}%` }} />
+                        <div style={{ width: '80%', maxWidth: 240 }}>
+                          <Progress
+                            value={dubProgress.total ? (dubProgress.current / dubProgress.total) * 100 : 0}
+                            tone="brand"
+                            size="sm"
+                          />
                         </div>
                         {dubProgress.text && <span style={{ fontSize: '0.65rem', color: '#a89984' }}>{dubProgress.text}</span>}
                       </>
@@ -493,23 +421,32 @@ export default function DubTab(props) {
                     ))}
                   </select>
                 </div>
-                <button onClick={handleTranslateAll} disabled={isTranslating || !dubSegments.length}
-                  style={{ padding: '3px 8px', background: 'rgba(131,165,152,0.12)', border: '1px solid rgba(131,165,152,0.25)', color: '#83a598', borderRadius: 4, cursor: 'pointer', fontSize: '0.62rem', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
-                  {isTranslating ? <Loader className="spinner" size={9} /> : <Languages size={10} />}
+                <Button
+                  variant="subtle" size="sm"
+                  onClick={handleTranslateAll}
+                  disabled={isTranslating || !dubSegments.length}
+                  loading={isTranslating}
+                  leading={!isTranslating && <Languages size={10} />}
+                >
                   {isTranslating ? 'Translating…' : 'Translate All'}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="subtle" size="sm"
                   onClick={() => editSegments(dubSegments.map(s => ({ ...s, text: s.text_original || s.text, translate_error: undefined })))}
                   disabled={!dubSegments.some(s => s.text_original && s.text_original !== s.text)}
                   title="Restore all segments to the original transcribed text"
-                  style={{ padding: '3px 8px', background: 'rgba(131,165,152,0.08)', border: '1px solid rgba(131,165,152,0.2)', color: '#83a598', borderRadius: 4, cursor: 'pointer', fontSize: '0.62rem', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
+                >
                   ↺ Restore
-                </button>
-                <button onClick={handleCleanupSegments} disabled={!dubSegments.length || !dubJobId}
+                </Button>
+                <Button
+                  variant="subtle" size="sm"
+                  onClick={handleCleanupSegments}
+                  disabled={!dubSegments.length || !dubJobId}
                   title="Merge tiny fragments and adjacent short segments"
-                  style={{ padding: '3px 8px', background: 'rgba(250,189,47,0.10)', border: '1px solid rgba(250,189,47,0.22)', color: '#fabd2f', borderRadius: 4, cursor: 'pointer', fontSize: '0.62rem', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
-                  <Wand2 size={10} /> Clean Up
-                </button>
+                  leading={<Wand2 size={10} />}
+                >
+                  Clean Up
+                </Button>
               </div>
 
               {dubTranscript && (
@@ -527,9 +464,9 @@ export default function DubTab(props) {
               )}
 
               {dubSegments.length > 0 && profiles.length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, padding: '3px 6px', background: 'rgba(142,192,124,0.06)', border: '1px solid rgba(142,192,124,0.12)', borderRadius: 4 }}>
+                <div className="dub-bulk-row dub-bulk-row--apply">
                   <User size={10} color="#8ec07c" />
-                  <span style={{ fontSize: '0.62rem', color: '#8ec07c', fontWeight: 600, whiteSpace: 'nowrap' }}>Apply Voice to All:</span>
+                  <span className="dub-bulk-row__label-success">Apply Voice to All:</span>
                   <select className="input-base" style={{ flex: 1, fontSize: '0.62rem', padding: '2px 4px' }}
                     value=""
                     onChange={e => {
@@ -557,10 +494,8 @@ export default function DubTab(props) {
               )}
 
               {selectedSegIds.size > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 6px', background: 'rgba(211,134,155,0.08)', border: '1px solid rgba(211,134,155,0.25)', borderRadius: 4, marginBottom: 4 }}>
-                  <span style={{ fontSize: '0.62rem', color: '#d3869b', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                    {selectedSegIds.size} selected
-                  </span>
+                <div className="dub-bulk-row dub-bulk-row--select">
+                  <span className="dub-bulk-row__label-brand">{selectedSegIds.size} selected</span>
                   <select className="input-base" style={{ fontSize: '0.62rem', padding: '2px 4px', minWidth: 100 }}
                     value="" onChange={(e) => { const v = e.target.value; if (v === '__clear__') bulkApplyToSelected({ profile_id: '' }); else if (v) bulkApplyToSelected({ profile_id: v }); }}>
                     <option value="">Set voice…</option>
@@ -582,14 +517,8 @@ export default function DubTab(props) {
                     <option value="__def__">(Default)</option>
                     {LANG_CODES.map(lc => <option key={lc.code} value={lc.code}>{lc.code.toUpperCase()}</option>)}
                   </select>
-                  <button onClick={bulkDeleteSelected}
-                    style={{ padding: '2px 8px', background: 'rgba(251,73,52,0.1)', border: '1px solid rgba(251,73,52,0.3)', color: '#fb4934', borderRadius: 4, cursor: 'pointer', fontSize: '0.62rem' }}>
-                    Delete
-                  </button>
-                  <button onClick={clearSegSelection}
-                    style={{ marginLeft: 'auto', padding: '2px 8px', background: 'transparent', border: '1px solid rgba(255,255,255,0.12)', color: '#a89984', borderRadius: 4, cursor: 'pointer', fontSize: '0.62rem' }}>
-                    Clear
-                  </button>
+                  <Button variant="danger" size="sm" onClick={bulkDeleteSelected}>Delete</Button>
+                  <Button variant="ghost"  size="sm" onClick={clearSegSelection} style={{ marginLeft: 'auto' }}>Clear</Button>
                 </div>
               )}
 
@@ -618,22 +547,25 @@ export default function DubTab(props) {
           {/* Actions footer */}
           <div className="studio-panel" style={{ padding: '4px 8px', flexShrink: 0 }}>
             {dubStep === 'done' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4, padding: '3px 6px', background: 'rgba(142,192,124,0.08)', border: '1px solid rgba(142,192,124,0.2)', borderRadius: 4 }}>
-                <Check size={10} color="#8ec07c" />
-                <span style={{ color: '#8ec07c', fontSize: '0.65rem' }}>Done! Tracks: {dubTracks.join(', ')}</span>
+              <div className="dub-footer-banner">
+                <Badge tone="success">
+                  <Check size={11} /> Done! Tracks: {dubTracks.join(', ')}
+                </Badge>
               </div>
             )}
             {dubError && (
-              <div style={{ marginBottom: 4, padding: '3px 6px', background: 'rgba(251,73,52,0.08)', border: '1px solid rgba(251,73,52,0.2)', borderRadius: 4 }}>
-                <span style={{ color: '#fb4934', fontSize: '0.62rem' }}>{dubError}</span>
+              <div className="dub-footer-banner">
+                <Badge tone="danger">
+                  <AlertCircle size={11} /> {dubError}
+                </Badge>
               </div>
             )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, padding: '0 4px', fontSize: '0.65rem', color: '#a89984', flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 600, color: '#ebdbb2' }}>Output Options:</span>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
-                <input type="checkbox" checked={preserveBg} onChange={e => setPreserveBg(e.target.checked)} style={{ cursor: 'pointer' }} /> Mix BG Audio
+            <div className="dub-outputs-row">
+              <span style={{ fontWeight: 600, color: 'var(--color-fg)' }}>Output Options:</span>
+              <label>
+                <input type="checkbox" checked={preserveBg} onChange={e => setPreserveBg(e.target.checked)} /> Mix BG Audio
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <label>
                 Default Track:
                 <select className="input-base" value={defaultTrack} onChange={e => setDefaultTrack(e.target.value)} style={{ fontSize: '0.6rem', padding: '2px 4px', width: '120px' }}>
                   <option value="original">Original</option>
@@ -645,69 +577,149 @@ export default function DubTab(props) {
               </label>
             </div>
             {dubTracks.length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '4px 6px', fontSize: '0.62rem', color: '#a89984', background: 'rgba(0,0,0,0.15)', borderRadius: 4, border: '1px solid rgba(255,255,255,0.04)', flexWrap: 'wrap' }}>
-                <span style={{ fontWeight: 600, color: '#ebdbb2', fontSize: '0.62rem' }}>Export Tracks:</span>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', color: exportTracks['original'] ? '#ebdbb2' : '#665c54' }}>
-                  <input type="checkbox" checked={exportTracks['original'] !== false} onChange={e => setExportTracks(prev => ({ ...prev, original: e.target.checked }))} style={{ cursor: 'pointer', accentColor: '#a89984' }} />
+              <div className="dub-tracks-row">
+                <span className="dub-tracks-row__title">Export Tracks:</span>
+                <label className={exportTracks['original'] ? 'is-on' : 'is-off'}>
+                  <input type="checkbox" checked={exportTracks['original'] !== false} onChange={e => setExportTracks(prev => ({ ...prev, original: e.target.checked }))} />
                   <span>Original</span>
                 </label>
                 {dubTracks.map(t => (
-                  <label key={t} style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', color: exportTracks[t] !== false ? '#8ec07c' : '#665c54' }}>
-                    <input type="checkbox" checked={exportTracks[t] !== false} onChange={e => setExportTracks(prev => ({ ...prev, [t]: e.target.checked }))} style={{ cursor: 'pointer', accentColor: '#8ec07c' }} />
-                    <span style={{ textTransform: 'uppercase' }}>{t}</span>
+                  <label key={t} className={exportTracks[t] !== false ? 'is-on is-success' : 'is-off'}>
+                    <input type="checkbox" checked={exportTracks[t] !== false} onChange={e => setExportTracks(prev => ({ ...prev, [t]: e.target.checked }))} />
+                    <span className="code">{t}</span>
                   </label>
                 ))}
               </div>
             )}
             <div className="dub-footer-btns" style={{ display: 'flex', gap: 4 }}>
               {dubStep === 'stopping' ? (
-                <button className="btn-primary" disabled style={{ marginTop: 0, flex: 1, padding: '4px 8px', fontSize: '0.7rem', background: 'linear-gradient(135deg,#504945,#3c3836)', opacity: 0.8 }}>
-                  <Loader className="spinner" size={9} /> Stopping…
-                </button>
+                <FooterBtn tone="stopping" disabled icon={<Loader className="spinner" size={9} />} label="Stopping…" />
               ) : dubStep === 'generating' ? (
-                <button className="btn-primary" style={{ marginTop: 0, flex: 1, padding: '4px 8px', fontSize: '0.7rem', background: 'linear-gradient(135deg,#fb4934,#cc241d)' }}
-                  onClick={handleDubStop}>
-                  <Square size={9} /> Stop ({dubProgress.current}/{dubProgress.total})
-                </button>
+                <FooterBtn tone="danger" onClick={handleDubStop} icon={<Square size={9} />}
+                  label={`Stop (${dubProgress.current}/${dubProgress.total})`} />
               ) : (
-                <button className="btn-primary" style={{ marginTop: 0, flex: 1, padding: '4px 8px', fontSize: '0.7rem' }} onClick={handleDubGenerate} disabled={!dubSegments.length}>
-                  <Play size={11} /> Generate Dub
-                </button>
+                <FooterBtn tone={dubSegments.length ? 'idle' : 'idle'} onClick={handleDubGenerate}
+                  disabled={!dubSegments.length} icon={<Play size={11} />} label="Generate Dub" />
               )}
-              <button className="btn-primary" style={{ marginTop: 0, flex: 1, padding: '4px 8px', fontSize: '0.7rem', background: dubStep === 'done' ? 'linear-gradient(135deg,#8ec07c,#689d6a)' : undefined }}
-                onClick={handleDubDownload} disabled={dubStep !== 'done'}>
-                <Download size={11} /> MP4
-              </button>
-              <button className="btn-primary" style={{ marginTop: 0, flex: 1, padding: '4px 8px', fontSize: '0.7rem', background: dubStep === 'done' ? 'linear-gradient(135deg,#83a598,#458588)' : undefined }}
-                onClick={handleDubAudioDownload} disabled={dubStep !== 'done'}>
-                <Volume2 size={11} /> WAV
-              </button>
-              <button className="btn-primary" style={{ marginTop: 0, flex: 1, padding: '4px 8px', fontSize: '0.7rem', background: dubSegments.length ? 'linear-gradient(135deg,#d3869b,#b16286)' : undefined }}
-                onClick={() => triggerDownload(`${API}/dub/srt/${dubJobId}/subtitles.srt`, 'subtitles.srt')} disabled={!dubSegments.length}>
-                <FileText size={11} /> SRT
-              </button>
+              <FooterBtn tone={dubStep === 'done' ? 'green' : 'idle'} disabled={dubStep !== 'done'}
+                onClick={handleDubDownload} icon={<Download size={11} />} label="MP4" />
+              <FooterBtn tone={dubStep === 'done' ? 'blue' : 'idle'} disabled={dubStep !== 'done'}
+                onClick={handleDubAudioDownload} icon={<Volume2 size={11} />} label="WAV" />
+              <FooterBtn tone={dubSegments.length ? 'pink' : 'idle'} disabled={!dubSegments.length}
+                onClick={() => triggerDownload(`${API}/dub/srt/${dubJobId}/subtitles.srt`, 'subtitles.srt')}
+                icon={<FileText size={11} />} label="SRT" />
             </div>
             <div className="dub-footer-btns" style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-              <button className="btn-primary" style={{ marginTop: 0, flex: 1, padding: '4px 7px', fontSize: '0.62rem', background: dubSegments.length ? 'linear-gradient(135deg,#b8bb26,#98971a)' : undefined }}
-                onClick={() => triggerDownload(`${API}/dub/vtt/${dubJobId}/subtitles.vtt`, 'subtitles.vtt')} disabled={!dubSegments.length}>
-                <FileText size={10} /> VTT
-              </button>
-              <button className="btn-primary" style={{ marginTop: 0, flex: 1, padding: '4px 7px', fontSize: '0.62rem', background: dubStep === 'done' ? 'linear-gradient(135deg,#fabd2f,#d79921)' : undefined }}
-                onClick={() => triggerDownload(`${API}/dub/download-mp3/${dubJobId}/audio.mp3?preserve_bg=${preserveBg}`, 'dubbed_audio.mp3')} disabled={dubStep !== 'done'}>
-                <Music size={10} /> MP3
-              </button>
-              <button className="btn-primary" style={{ marginTop: 0, flex: 1, padding: '4px 7px', fontSize: '0.62rem', background: dubStep === 'done' ? 'linear-gradient(135deg,#fe8019,#d65d0e)' : undefined }}
-                onClick={() => triggerDownload(`${API}/dub/export-segments/${dubJobId}`, 'segments.zip')} disabled={dubStep !== 'done'}>
-                <Package size={10} /> Clips
-              </button>
-              <button className="btn-primary" style={{ marginTop: 0, flex: 1, padding: '4px 7px', fontSize: '0.62rem', background: dubStep === 'done' ? 'linear-gradient(135deg,#d3869b,#b16286)' : undefined }}
-                onClick={() => triggerDownload(`${API}/dub/export-stems/${dubJobId}`, 'stems.zip')} disabled={dubStep !== 'done'}>
-                <Layers size={10} /> Stems
-              </button>
+              <FooterBtn sm tone={dubSegments.length ? 'lime' : 'idle'} disabled={!dubSegments.length}
+                onClick={() => triggerDownload(`${API}/dub/vtt/${dubJobId}/subtitles.vtt`, 'subtitles.vtt')}
+                icon={<FileText size={10} />} label="VTT" />
+              <FooterBtn sm tone={dubStep === 'done' ? 'amber' : 'idle'} disabled={dubStep !== 'done'}
+                onClick={() => triggerDownload(`${API}/dub/download-mp3/${dubJobId}/audio.mp3?preserve_bg=${preserveBg}`, 'dubbed_audio.mp3')}
+                icon={<Music size={10} />} label="MP3" />
+              <FooterBtn sm tone={dubStep === 'done' ? 'orange' : 'idle'} disabled={dubStep !== 'done'}
+                onClick={() => triggerDownload(`${API}/dub/export-segments/${dubJobId}`, 'segments.zip')}
+                icon={<Package size={10} />} label="Clips" />
+              <FooterBtn sm tone={dubStep === 'done' ? 'pink' : 'idle'} disabled={dubStep !== 'done'}
+                onClick={() => triggerDownload(`${API}/dub/export-stems/${dubJobId}`, 'stems.zip')}
+                icon={<Layers size={10} />} label="Stems" />
             </div>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+const PREP_STAGE_LABEL = {
+  download: 'Downloading video…',
+  extract:  'Extracting audio…',
+  demucs:   'Separating vocals / music (Demucs)…',
+  scene:    'Detecting scene cuts…',
+  cached:   '⚡ Using cached results…',
+};
+const PREP_FULL   = ['download', 'extract', 'demucs', 'scene'];
+const PREP_CACHED = ['download', 'extract', 'cached'];
+
+/**
+ * PrepOverlay — the prepare-upload stage indicator.
+ * `large` makes the surrounding frame bigger (used for the empty-state drop zone).
+ */
+function PrepOverlay({ stage, onAbort, large = false }) {
+  const stages = stage === 'cached' ? PREP_CACHED : PREP_FULL;
+  const body = (
+    <>
+      <Loader className="spinner" size={large ? 28 : 20} color="#d3869b" />
+      <span className="dub-prep-overlay__title" style={{ fontSize: large ? '0.95rem' : '0.85rem' }}>
+        {PREP_STAGE_LABEL[stage] || 'Preparing…'}
+      </span>
+      <div className={`dub-prep-chips ${large ? 'dub-prep-chips--lg' : ''}`}>
+        {stages.map(s => (
+          <span
+            key={s}
+            className={`dub-prep-chip ${stage === s ? 'is-active' : ''} ${s === 'cached' ? 'is-cached' : ''}`}
+          >
+            {s === 'cached' ? '⚡ cached' : s}
+          </span>
+        ))}
+      </div>
+      {stage === 'demucs' && (
+        <span className="dub-prep-overlay__note">
+          Demucs can take several minutes on long videos. Long audio = longer wait.
+        </span>
+      )}
+      <Button variant="danger" size="sm" onClick={onAbort} leading={<Square size={11} />}>
+        Stop
+      </Button>
+    </>
+  );
+  return large
+    ? <div className="dub-prep-overlay dub-prep-overlay--large">{body}</div>
+    : <div className="dub-prep-overlay">{body}</div>;
+}
+
+/**
+ * TranscribeOverlay — Whisper progress + ETA while transcribing.
+ */
+function TranscribeOverlay({ elapsed, duration, onAbort }) {
+  const est = duration > 0 ? Math.max(10, Math.ceil(duration / 60) * 3 + 8) : 0;
+  const mm = Math.floor(elapsed / 60);
+  const ss = String(elapsed % 60).padStart(2, '0');
+  return (
+    <div className="dub-trans-overlay">
+      <div className="dub-trans-overlay__head">
+        <Loader className="spinner" size={18} color="#d3869b" />
+        <span className="dub-trans-overlay__title">Transcribing with Whisper…</span>
+      </div>
+      <div className="dub-trans-overlay__stats">
+        <span>⏱ {mm}:{ss} elapsed</span>
+        {est > 0 && <span>~{Math.max(0, est - elapsed)}s remaining</span>}
+      </div>
+      {duration > 0 && (
+        <div className="dub-trans-overlay__bar">
+          <Progress value={Math.min(95, (elapsed / est) * 100)} tone="brand" size="sm" />
+        </div>
+      )}
+      <Button variant="danger" size="sm" onClick={onAbort} leading={<Square size={11} />}>
+        Stop
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * FooterBtn — the gradient-per-tone download button family in the action footer.
+ * Uses the legacy .btn-primary as the shape/hover base, just picks a tone class.
+ */
+function FooterBtn({ tone = 'idle', sm = false, disabled, onClick, icon, label }) {
+  const cls = [
+    'btn-primary',
+    'dub-footer-btn',
+    sm && 'dub-footer-btn--sm',
+    `dub-footer-btn--${tone}`,
+  ].filter(Boolean).join(' ');
+  return (
+    <button className={cls} disabled={disabled} onClick={onClick}>
+      {icon} {label}
+    </button>
   );
 }

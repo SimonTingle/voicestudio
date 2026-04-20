@@ -56,7 +56,10 @@ def _run_inference(
             torch.mps.empty_cache()
         elif torch.cuda.is_available():
             torch.cuda.empty_cache()
-        raise RuntimeError(f"F5-TTS Engine crashed: {str(e)}")
+        raise RuntimeError(
+            f"TTS engine stopped mid-generation. This usually means it ran out of memory. "
+            f"Try the Flush button to reload the model, then regenerate. Underlying error: {e}"
+        )
 
 
 @router.post("/generate")
@@ -180,7 +183,13 @@ async def generate_speech(
     except Exception as e:
         tb = traceback.format_exc()
         logger.error("Inference failed: %s\n%s", e, tb)
-        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Couldn't synthesize audio. See Settings → Logs → Backend for the full trace. "
+                f"Underlying error: {e}"
+            ),
+        )
     finally:
         if cleanup_ref and ref_audio_path:
             with contextlib.suppress(OSError):

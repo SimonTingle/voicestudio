@@ -25,14 +25,32 @@ import torch
 import torchaudio
 import warnings
 import logging
+from logging.handlers import RotatingFileHandler
 
 warnings.filterwarnings("ignore", category=UserWarning)
 torchaudio.set_audio_backend("soundfile")
 
+_LOG_FMT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 logging.basicConfig(
     level=os.environ.get("OMNIVOICE_LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    format=_LOG_FMT,
 )
+
+# Rolling file handler so the Settings UI > Logs > Backend tab has something to read.
+# Attached to root so uvicorn, fastapi, and every `omnivoice.*` namespace land here.
+# Not attached under _disable_file_log to keep CI/headless tests quiet.
+if not os.environ.get("OMNIVOICE_DISABLE_FILE_LOG"):
+    from core.config import LOG_PATH as _LOG_PATH  # local import — avoids circular import at module top
+    try:
+        _file_handler = RotatingFileHandler(
+            _LOG_PATH, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8",
+        )
+        _file_handler.setLevel(logging.INFO)
+        _file_handler.setFormatter(logging.Formatter(_LOG_FMT))
+        logging.getLogger().addHandler(_file_handler)
+    except Exception as _e:  # disk full, permission denied, etc. — don't block startup
+        logging.getLogger("omnivoice.api").warning("Runtime log file disabled: %s", _e)
+
 logger = logging.getLogger("omnivoice.api")
 
 import asyncio

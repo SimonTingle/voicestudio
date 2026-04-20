@@ -4,21 +4,29 @@ import {
   CheckCircle, AlertCircle,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { systemInfo, systemLogs, systemLogsTauri, clearSystemLogs, modelStatus as fetchModelStatus } from '../api/system';
+import { systemInfo, systemLogs, systemLogsTauri, clearSystemLogs, clearTauriLogs, modelStatus as fetchModelStatus } from '../api/system';
 import { getFrontendLogs, clearFrontendLogs } from '../utils/consoleBuffer';
+import { Tabs, Segmented, Button, Badge } from '../ui';
+import './Settings.css';
 
 const TABS = [
-  { id: 'models',  label: 'Models',  Icon: Cpu,          accent: '#f3a5b6' },
-  { id: 'logs',    label: 'Logs',    Icon: FileText,     accent: '#fabd2f' },
-  { id: 'about',   label: 'About',   Icon: Info,         accent: '#8ec07c' },
-  { id: 'privacy', label: 'Privacy', Icon: ShieldCheck,  accent: '#b8bb26' },
+  { id: 'models',  label: 'Models',  icon: Cpu,          accent: '#f3a5b6' },
+  { id: 'logs',    label: 'Logs',    icon: FileText,     accent: '#fabd2f' },
+  { id: 'about',   label: 'About',   icon: Info,         accent: '#8ec07c' },
+  { id: 'privacy', label: 'Privacy', icon: ShieldCheck,  accent: '#b8bb26' },
+];
+
+const LOG_SOURCES = [
+  { value: 'backend',  label: 'Backend' },
+  { value: 'frontend', label: 'Frontend' },
+  { value: 'tauri',    label: 'Tauri' },
 ];
 
 function Row({ label, value, mono }) {
   return (
     <div className="settings-row">
       <span className="label">{label}</span>
-      <span className="value" style={mono ? { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' } : undefined}>
+      <span className={`value ${mono ? 'settings-row__mono' : ''}`}>
         {value}
       </span>
     </div>
@@ -29,7 +37,7 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState('models');
   const [info, setInfo] = useState(null);
   const [status, setStatus] = useState(null);
-  const [logSource, setLogSource] = useState('backend'); // backend | frontend | tauri
+  const [logSource, setLogSource] = useState('backend');
   const [logs, setLogs] = useState([]);
   const [logMeta, setLogMeta] = useState({ path: '', exists: false });
   const [loadingLogs, setLoadingLogs] = useState(false);
@@ -53,7 +61,6 @@ export default function Settings() {
         setLogs(r.lines || []);
         setLogMeta({ path: r.path || '—', exists: !!r.exists, candidates: r.candidates });
       } else {
-        // frontend: in-memory ring buffer
         const entries = getFrontendLogs();
         const lines = entries.map((e) => {
           const ts = new Date(e.t).toISOString().slice(11, 23);
@@ -88,10 +95,21 @@ export default function Settings() {
       return;
     }
     if (logSource === 'tauri') {
-      toast('Tauri log is managed by the OS — clear it via Finder/Explorer.', { icon: 'ℹ️' });
+      if (!confirm('Truncate the Tauri-side log files? The OS will continue to write new entries.')) return;
+      try {
+        const r = await clearTauriLogs();
+        if (!r?.cleared?.length) {
+          toast('Nothing to clear — no Tauri log file on disk yet.', { icon: 'ℹ️' });
+        } else {
+          toast.success(`Cleared ${r.cleared.length} Tauri log file(s)`);
+          setLogs([]);
+        }
+      } catch (e) {
+        toast.error('Failed to clear Tauri logs: ' + e.message);
+      }
       return;
     }
-    if (!confirm('Clear the crash log? This cannot be undone.')) return;
+    if (!confirm('Clear the backend runtime + crash logs? This cannot be undone.')) return;
     try {
       await clearSystemLogs();
       toast.success('Backend logs cleared');
@@ -101,17 +119,10 @@ export default function Settings() {
     }
   };
 
-  const LOG_SOURCES = [
-    { id: 'backend',  label: 'Backend' },
-    { id: 'frontend', label: 'Frontend' },
-    { id: 'tauri',    label: 'Tauri' },
-  ];
-
-  const modelBadge = status?.status === 'ready'
-    ? <span className="settings-badge"><CheckCircle size={11} /> Ready</span>
-    : status?.status === 'loading'
-    ? <span className="settings-badge warn"><RefreshCw size={11} className="spinner" /> Loading…</span>
-    : <span className="settings-badge warn">Idle</span>;
+  const modelBadge =
+    status?.status === 'ready'   ? <Badge tone="success"><CheckCircle size={11} /> Ready</Badge>
+  : status?.status === 'loading' ? <Badge tone="warn"><RefreshCw size={11} className="spinner" /> Loading…</Badge>
+                                 : <Badge tone="warn">Idle</Badge>;
 
   return (
     <div className="settings-page">
@@ -120,161 +131,142 @@ export default function Settings() {
         Where your files live, what the model's doing, and what's gone wrong lately.
       </div>
 
-      {/* Tab bar */}
-      <div className="settings-tabs">
-        {TABS.map(({ id, label, Icon, accent }) => {
-          const active = activeTab === id;
-          return (
-            <button
-              key={id}
-              className={`settings-tab ${active ? 'active' : ''}`}
-              onClick={() => setActiveTab(id)}
-              style={active ? { '--tab-accent': accent } : undefined}
-            >
-              <Icon size={13} /> {label}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        items={TABS}
+        value={activeTab}
+        onChange={setActiveTab}
+        className="settings-tabs-ui"
+      />
 
-      {/* Models */}
       {activeTab === 'models' && (
         <section className="settings-section">
           <h2><Cpu size={16} color="#f3a5b6" /> Models</h2>
           {info ? (
             <>
-              <Row label="TTS checkpoint" value={info.model_checkpoint} mono />
-              <Row label="ASR model (Whisper)" value={info.asr_model} mono />
-              <Row label="Translate provider" value={info.translate_provider} />
-              <Row label="Device" value={info.device?.toUpperCase()} />
-              <Row label="Status" value={modelBadge} />
-              <Row label="Idle timeout" value={`${info.idle_timeout_seconds}s`} />
+              <Row label="TTS checkpoint"       value={info.model_checkpoint} mono />
+              <Row label="ASR model (Whisper)"  value={info.asr_model} mono />
+              <Row label="Translate provider"   value={info.translate_provider} />
+              <Row label="Device"               value={info.device?.toUpperCase()} />
+              <Row label="Status"               value={modelBadge} />
+              <Row label="Idle timeout"         value={`${info.idle_timeout_seconds}s`} />
               <Row
                 label="Hugging Face token"
                 value={info.has_hf_token
-                  ? <span className="settings-badge"><CheckCircle size={11} /> Set</span>
-                  : <span className="settings-badge warn"><AlertCircle size={11} /> Missing — diarization disabled</span>}
+                  ? <Badge tone="success"><CheckCircle size={11} /> Set</Badge>
+                  : <Badge tone="warn"><AlertCircle size={11} /> Missing — diarization disabled</Badge>}
               />
             </>
           ) : (
-            <div style={{ color: '#665c54', fontSize: '0.8rem' }}>Loading…</div>
+            <div className="settings-muted">Loading…</div>
           )}
         </section>
       )}
 
-      {/* Logs */}
       {activeTab === 'logs' && (
         <section className="settings-section">
-          <h2 style={{ justifyContent: 'space-between', display: 'flex' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <h2 className="settings-section__head-row">
+            <span className="settings-section__head-left">
               <FileText size={16} color="#fabd2f" /> Logs
             </span>
-            <span style={{ display: 'flex', gap: 6 }}>
-              <button
+            <span className="settings-section__head-actions">
+              <Button
+                variant="subtle"
+                size="sm"
                 onClick={refreshLogs}
-                disabled={loadingLogs}
-                className="btn-primary"
-                style={{ padding: '5px 12px', fontSize: '0.7rem', background: 'rgba(131,165,152,0.15)', color: '#83a598', border: '1px solid rgba(131,165,152,0.3)' }}
+                loading={loadingLogs}
+                leading={!loadingLogs && <RefreshCw size={11} />}
               >
-                <RefreshCw size={11} className={loadingLogs ? 'spinner' : ''} /> Refresh
-              </button>
-              <button
+                Refresh
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
                 onClick={onClearLogs}
-                className="btn-primary"
-                style={{ padding: '5px 12px', fontSize: '0.7rem', background: 'rgba(251,73,52,0.12)', color: '#fb4934', border: '1px solid rgba(251,73,52,0.3)' }}
+                leading={<Trash2 size={11} />}
               >
-                <Trash2 size={11} /> Clear
-              </button>
+                Clear
+              </Button>
             </span>
           </h2>
 
-          {/* Sub-tabs: Backend / Frontend / Tauri */}
-          <div className="settings-subtabs">
-            {LOG_SOURCES.map((src) => (
-              <button
-                key={src.id}
-                className={`settings-subtab ${logSource === src.id ? 'active' : ''}`}
-                onClick={() => setLogSource(src.id)}
-              >
-                {src.label}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            items={LOG_SOURCES}
+            value={logSource}
+            onChange={setLogSource}
+          />
 
-          <div style={{ fontSize: '0.7rem', color: '#7c6f64', marginBottom: 8, fontFamily: 'ui-monospace, Menlo, monospace', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="settings-log-meta">
             <span>{logMeta.path || '—'}</span>
-            {logSource === 'tauri' && !logMeta.exists ? (
-              <span className="settings-badge warn"><AlertCircle size={11} /> Not found — enable tauri-plugin-log to produce a file</span>
-            ) : null}
+            {logSource === 'tauri' && !logMeta.exists && (
+              <Badge tone="warn">
+                <AlertCircle size={11} /> No Tauri log on disk yet — launch via the desktop build to produce one
+              </Badge>
+            )}
           </div>
           <div className="settings-log">
             {logs.length === 0
-              ? <span style={{ color: '#665c54', fontStyle: 'italic' }}>
+              ? <span className="settings-log__empty">
                   {logSource === 'frontend'
-                    ? 'No frontend console entries captured yet. 🎉'
+                    ? 'No frontend console entries captured yet. Interact with the app — every console.* will appear here.'
                     : logSource === 'tauri'
-                      ? 'No Tauri log on disk.'
-                      : "No backend errors logged. Nothing's broken (yet). 🎉"}
+                      ? 'No Tauri log available. Runs in the desktop shell only.'
+                      : "Runtime log is empty. Activity will appear here as the backend logs it."}
                 </span>
               : logs.join('')}
           </div>
         </section>
       )}
 
-      {/* About */}
       {activeTab === 'about' && (
         <section className="settings-section">
           <h2><Info size={16} color="#8ec07c" /> About</h2>
-          <Row label="App" value="OmniVoice Studio" />
-          <Row label="Python" value={info?.python || '—'} mono />
-          <Row label="Platform" value={info?.platform || '—'} />
-          <Row label="Data directory" value={info?.data_dir || '—'} mono />
-          <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <a
-              href="https://github.com/k2-fsa/OmniVoice"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-primary"
-              style={{ padding: '6px 14px', fontSize: '0.72rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.06)', color: '#d5c4a1', border: '1px solid rgba(255,255,255,0.1)' }}
+          <Row label="App"             value="OmniVoice Studio" />
+          <Row label="Python"          value={info?.python || '—'} mono />
+          <Row label="Platform"        value={info?.platform || '—'} />
+          <Row label="Data directory"  value={info?.data_dir || '—'} mono />
+          <div className="settings-link-row">
+            <Button
+              variant="subtle"
+              size="md"
+              leading={<ExternalLink size={12} />}
+              onClick={() => window.open('https://github.com/k2-fsa/OmniVoice', '_blank', 'noopener,noreferrer')}
             >
-              <ExternalLink size={12} /> OmniVoice on GitHub
-            </a>
-            <a
-              href="https://huggingface.co/k2-fsa/OmniVoice"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-primary"
-              style={{ padding: '6px 14px', fontSize: '0.72rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.06)', color: '#d5c4a1', border: '1px solid rgba(255,255,255,0.1)' }}
+              OmniVoice on GitHub
+            </Button>
+            <Button
+              variant="subtle"
+              size="md"
+              leading={<ExternalLink size={12} />}
+              onClick={() => window.open('https://huggingface.co/k2-fsa/OmniVoice', '_blank', 'noopener,noreferrer')}
             >
-              <ExternalLink size={12} /> Model card
-            </a>
+              Model card
+            </Button>
           </div>
         </section>
       )}
 
-      {/* Privacy */}
       {activeTab === 'privacy' && (
         <section className="settings-section">
           <h2><ShieldCheck size={16} color="#b8bb26" /> Privacy</h2>
-          <p style={{ margin: '0 0 10px', color: '#a89984', lineHeight: 1.6, fontSize: '0.84rem' }}>
-            Everything runs on <strong style={{ color: '#f5e6c5' }}>this machine</strong>. Your audio, video, and transcripts
+          <p className="settings-prose">
+            Everything runs on <strong>this machine</strong>. Your audio, video, and transcripts
             never leave your computer unless you explicitly use an online translator (Google, DeepL, etc.) or
             push to HuggingFace.
           </p>
-          <Row label="Uploads stored at" value={info?.data_dir ? `${info.data_dir}/` : '—'} mono />
-          <Row label="Outputs stored at" value={info?.outputs_dir || '—'} mono />
-          <Row label="Generation history" value={<span className="settings-badge">Local SQLite</span>} />
+          <Row label="Uploads stored at"   value={info?.data_dir ? `${info.data_dir}/` : '—'} mono />
+          <Row label="Outputs stored at"   value={info?.outputs_dir || '—'} mono />
+          <Row label="Generation history"  value={<Badge tone="neutral">Local SQLite</Badge>} />
           <Row
             label="Network calls"
             value={
               info?.translate_provider && ['google', 'deepl', 'mymemory', 'microsoft', 'openai'].includes(info.translate_provider)
-                ? <span className="settings-badge warn"><AlertCircle size={11} /> Translator is online: {info.translate_provider}</span>
-                : <span className="settings-badge"><CheckCircle size={11} /> Offline translator</span>
+                ? <Badge tone="warn"><AlertCircle size={11} /> Translator is online: {info.translate_provider}</Badge>
+                : <Badge tone="success"><CheckCircle size={11} /> Offline translator</Badge>
             }
           />
           <Row
             label="Model telemetry"
-            value={<span className="settings-badge"><CheckCircle size={11} /> None — no tracking</span>}
+            value={<Badge tone="success"><CheckCircle size={11} /> None — no tracking</Badge>}
           />
         </section>
       )}

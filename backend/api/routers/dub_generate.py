@@ -23,7 +23,10 @@ async def dub_generate(job_id: str, req: DubRequest):
     """Adds a dub generation job to the async batch task pool."""
     job = _get_job(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(
+            status_code=404,
+            detail="This dub session has expired or was never created. Re-upload the video to start a new one.",
+        )
 
     _model = await get_model()
 
@@ -95,7 +98,12 @@ async def dub_generate(job_id: str, req: DubRequest):
                         torch.mps.empty_cache()
                     elif torch.cuda.is_available():
                         torch.cuda.empty_cache()
-                    raise RuntimeError(f"Engine VRAM crash on segment: {str(e)}")
+                    # User-facing: what happened · why · what to do.
+                    raise RuntimeError(
+                        f"Ran out of GPU memory generating this segment. "
+                        f"Try the Flush button in the header to free VRAM, or switch to CPU in Settings. "
+                        f"Underlying error: {e}"
+                    )
 
             seg_instruct = seg.instruct or req.instruct
             seg_profile = seg.profile_id or None

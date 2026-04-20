@@ -8,6 +8,14 @@ import { toast } from 'react-hot-toast';
 import { API } from '../api/client';
 import { clearDubHistory } from '../api/dub';
 import { clearHistory as clearGenHistory } from '../api/generate';
+import { Button } from '../ui';
+import './Sidebar.css';
+
+const SIDEBAR_TABS = [
+  { id: 'projects',  icon: FolderOpen,   accent: '#b8bb26' },
+  { id: 'history',   icon: History,      accent: '#d3869b' },
+  { id: 'downloads', icon: DownloadCloud, accent: '#8ec07c' },
+];
 
 function timeAgo(ms) {
   const diff = Date.now() - ms;
@@ -72,78 +80,50 @@ export default function Sidebar(props) {
     toast.success('History cleared');
   };
 
+  const tabCount = {
+    projects: mode === 'dub' ? studioProjects.length : (mode === 'clone' ? profiles.filter(p => !p.instruct).length : profiles.filter(p => !!p.instruct).length),
+    history: history.length + dubHistory.length,
+    downloads: exportHistory.length,
+  };
+  const tabLabel = { projects: 'Projects', history: 'History', downloads: 'Exports' };
+
   return (
-    <div className="glass-panel history-panel" style={{ display: 'flex', flexDirection: 'column' }}>
+    <div className={`glass-panel history-panel sidebar ${isSidebarCollapsed ? 'is-collapsed' : ''}`}>
       {/* Tab bar — only tabs relevant to the current view */}
-      <div style={{ display: 'flex', gap: 6, padding: '6px 8px', borderBottom: '1px solid var(--glass-border)', background: 'rgba(0,0,0,0.15)', flexShrink: 0, flexDirection: isSidebarCollapsed ? 'column' : 'row', justifyContent: 'center' }}>
-        {availableTabs.includes('projects') && (
+      <div className="sidebar__tabs">
+        {SIDEBAR_TABS.filter(t => availableTabs.includes(t.id)).map(({ id, icon: Icon, accent }) => (
           <button
-            onClick={() => setSidebarTab('projects')}
-            style={{
-              flex: 1, height: '26px', maxWidth: isSidebarCollapsed ? '100%' : '60px', cursor: 'pointer', border: '1px solid',
-              borderColor: sidebarTab === 'projects' ? 'rgba(184,187,38,0.35)' : 'rgba(255,255,255,0.06)',
-              background: sidebarTab === 'projects' ? 'rgba(184,187,38,0.15)' : 'rgba(0,0,0,0.2)',
-              color: sidebarTab === 'projects' ? '#b8bb26' : '#a89984',
-              borderRadius: 6, transition: 'all 0.2s ease', display: 'flex', justifyContent: 'center', alignItems: 'center',
-            }}
-            title={`Projects (${mode === 'dub' ? studioProjects.length : (mode === 'clone' ? profiles.filter(p => !p.instruct).length : profiles.filter(p => !!p.instruct).length)})`}
+            key={id}
+            onClick={() => setSidebarTab(id)}
+            className={`sidebar__tab ${sidebarTab === id ? 'is-active' : ''}`}
+            style={{ '--sidebar-tab-accent': accent }}
+            title={`${tabLabel[id]} (${tabCount[id]})`}
           >
-            <FolderOpen size={13} />
+            <Icon size={13} />
           </button>
-        )}
-        {availableTabs.includes('history') && (
-          <button
-            onClick={() => setSidebarTab('history')}
-            style={{
-              flex: 1, height: '26px', maxWidth: isSidebarCollapsed ? '100%' : '60px', cursor: 'pointer', border: '1px solid',
-              borderColor: sidebarTab === 'history' ? 'rgba(211,134,155,0.35)' : 'rgba(255,255,255,0.06)',
-              background: sidebarTab === 'history' ? 'rgba(211,134,155,0.15)' : 'rgba(0,0,0,0.2)',
-              color: sidebarTab === 'history' ? '#d3869b' : '#a89984',
-              borderRadius: 6, transition: 'all 0.2s ease', display: 'flex', justifyContent: 'center', alignItems: 'center',
-            }}
-            title={`History (${history.length + dubHistory.length})`}
-          >
-            <History size={13} />
-          </button>
-        )}
-        {availableTabs.includes('downloads') && (
-          <button
-            onClick={() => setSidebarTab('downloads')}
-            style={{
-              flex: 1, height: '26px', maxWidth: isSidebarCollapsed ? '100%' : '60px', cursor: 'pointer', border: '1px solid',
-              borderColor: sidebarTab === 'downloads' ? 'rgba(142,192,124,0.35)' : 'rgba(255,255,255,0.06)',
-              background: sidebarTab === 'downloads' ? 'rgba(142,192,124,0.15)' : 'rgba(0,0,0,0.2)',
-              color: sidebarTab === 'downloads' ? '#8ec07c' : '#a89984',
-              borderRadius: 6, transition: 'all 0.2s ease', display: 'flex', justifyContent: 'center', alignItems: 'center',
-            }}
-            title={`Exports (${exportHistory.length})`}
-          >
-            <DownloadCloud size={13} />
-          </button>
-        )}
+        ))}
       </div>
 
       {!isSidebarCollapsed && (
-        <div style={{ padding: '6px 8px 2px 8px', flexShrink: 0 }}>
-          <div style={{ position: 'relative' }}>
-            <Search size={10} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#6b6657' }} />
-            <input
-              className="input-base"
-              placeholder="Search…"
-              value={sbQuery}
-              onChange={(e) => setSbQuery(e.target.value)}
-              style={{ width: '100%', fontSize: '0.68rem', padding: '4px 22px 4px 22px', borderRadius: 999 }}
-            />
-            {sbQuery ? (
-              <button
-                onClick={() => setSbQuery('')}
-                style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#6b6657', cursor: 'pointer' }}
-                title="Clear"
-              >
-                <X size={10} />
-              </button>
-            ) : null}
-          </div>
+        <div className="sidebar__search">
+          <Search size={10} className="sidebar__search-icon" />
+          <input
+            className="input-base sidebar__search-input"
+            placeholder="Search…"
+            value={sbQuery}
+            onChange={(e) => setSbQuery(e.target.value)}
+          />
+          {sbQuery && (
+            <Button
+              variant="ghost"
+              iconSize="sm"
+              onClick={() => setSbQuery('')}
+              title="Clear"
+              className="sidebar__search-clear"
+            >
+              <X size={10} />
+            </Button>
+          )}
         </div>
       )}
 
@@ -151,31 +131,33 @@ export default function Sidebar(props) {
         {/* ── PROJECTS TAB ── */}
         {sidebarTab === 'projects' && (
           <>
-            {mode === 'dub' && (dubStep !== 'idle' || dubVideoFile) && !isSidebarCollapsed && (
-              <button onClick={saveProject} style={{
-                width: '100%', marginBottom: 10, padding: '7px 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                background: activeProjectId ? 'rgba(184,187,38,0.15)' : 'rgba(131,165,152,0.15)',
-                border: `1px solid ${activeProjectId ? 'rgba(184,187,38,0.35)' : 'rgba(131,165,152,0.3)'}`,
-                borderRadius: 6, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 500,
-                color: activeProjectId ? '#b8bb26' : '#83a598',
-              }}>
-                <Save size={13} /> {activeProjectId ? 'Save Dub Project' : 'Save as New Dub Project'}
-              </button>
-            )}
-            {mode === 'dub' && (dubStep !== 'idle' || dubVideoFile) && isSidebarCollapsed && (
-              <button onClick={saveProject} title={activeProjectId ? 'Save Dub Project' : 'Save as New Dub Project'} style={{
-                width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 8, flexShrink: 0,
-                background: activeProjectId ? 'rgba(184,187,38,0.15)' : 'rgba(131,165,152,0.15)',
-                border: `1px solid ${activeProjectId ? 'rgba(184,187,38,0.35)' : 'rgba(131,165,152,0.3)'}`,
-                borderRadius: 6, cursor: 'pointer', color: activeProjectId ? '#b8bb26' : '#83a598',
-              }}>
-                <Save size={14} />
-              </button>
+            {mode === 'dub' && (dubStep !== 'idle' || dubVideoFile) && (
+              isSidebarCollapsed ? (
+                <Button
+                  variant="subtle"
+                  iconSize="md"
+                  onClick={saveProject}
+                  title={activeProjectId ? 'Save Dub Project' : 'Save as New Dub Project'}
+                  className={`sidebar__save-btn ${activeProjectId ? 'is-active-project' : ''}`}
+                >
+                  <Save size={14} />
+                </Button>
+              ) : (
+                <Button
+                  variant="subtle"
+                  block
+                  onClick={saveProject}
+                  leading={<Save size={13} />}
+                  className={`sidebar__save-btn sidebar__save-btn--full ${activeProjectId ? 'is-active-project' : ''}`}
+                >
+                  {activeProjectId ? 'Save Dub Project' : 'Save as New Dub Project'}
+                </Button>
+              )
             )}
 
             {!isSidebarCollapsed && (
               <div
-                style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', padding: '2px 0' }}
+                className="sidebar__section-title"
                 onClick={() => setIsSidebarProjectsCollapsed(!isSidebarProjectsCollapsed)}
               >
                 <span>{mode === 'dub' ? 'Studio Projects (Dubbing)' : (mode === 'clone' ? 'Voice Clones (Audio)' : 'Designed Voices (Synthetic)')}</span>
@@ -188,11 +170,11 @@ export default function Sidebar(props) {
                 {mode === 'dub' && (
                   <>
                     {filteredProjects.length === 0 ? (
-                      <div style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '24px 12px' }}>
-                        <Film size={28} style={{ opacity: 0.3, marginBottom: 8 }} />
-                        <p style={{ fontSize: '0.78rem', margin: 0, marginBottom: 4 }}>No saved dub projects</p>
-                        <p style={{ fontSize: '0.62rem', margin: 0, opacity: 0.6 }}>Upload a video and click Save to keep your work.</p>
-                      </div>
+                      <EmptyState
+                        icon={Film}
+                        title="No saved dub projects"
+                        hint="Upload a video and click Save to keep your work."
+                      />
                     ) : (
                       filteredProjects.map(proj => (
                         <div key={proj.id}
@@ -230,11 +212,11 @@ export default function Sidebar(props) {
                 {(mode === 'clone' || mode === 'design') && (
                   <>
                     {filteredProfiles.filter(p => mode === "clone" ? !p.instruct : !!p.instruct).length === 0 ? (
-                      <div style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '24px 12px' }}>
-                        {mode === 'clone' ? <Fingerprint size={28} style={{ opacity: 0.3, marginBottom: 8 }} /> : <Wand2 size={28} style={{ opacity: 0.3, marginBottom: 8 }} />}
-                        <p style={{ fontSize: '0.78rem', margin: 0, marginBottom: 4 }}>No {mode === 'clone' ? 'voice clones' : 'designed voices'} yet</p>
-                        <p style={{ fontSize: '0.62rem', margin: 0, opacity: 0.6 }}>{mode === 'clone' ? 'Record or upload audio, then click Save as Voice Profile.' : 'Generate a voice and save it from History.'}</p>
-                      </div>
+                      <EmptyState
+                        icon={mode === 'clone' ? Fingerprint : Wand2}
+                        title={`No ${mode === 'clone' ? 'voice clones' : 'designed voices'} yet`}
+                        hint={mode === 'clone' ? 'Record or upload audio, then click Save as Voice Profile.' : 'Generate a voice and save it from History.'}
+                      />
                     ) : (
                       (mode === 'clone' ? filteredProfiles.filter(p => !p.instruct) : filteredProfiles.filter(p => !!p.instruct)).map(proj => {
                         const accent = proj.is_locked ? '#b8bb26' : (mode === 'clone' ? '#d3869b' : '#8ec07c');
@@ -280,46 +262,28 @@ export default function Sidebar(props) {
             )}
 
             {isSidebarCollapsed && mode === 'dub' && filteredProjects.map(proj => (
-              <div key={proj.id} title={`Load: ${proj.name}`} onClick={() => loadProject(proj.id)}
-                style={{
-                  width: '34px', height: '34px', flexShrink: 0, display: 'flex', justifyContent: 'center', alignItems: 'center',
-                  borderRadius: '12px 16px 10px 18px / 14px 10px 16px 12px',
-                  cursor: 'pointer',
-                  background: activeProjectId === proj.id
-                    ? 'linear-gradient(140deg, rgba(243,165,182,0.25), rgba(250,189,47,0.15))'
-                    : 'rgba(255,255,255,0.04)',
-                  border: `1px solid ${activeProjectId === proj.id ? 'rgba(243,165,182,0.4)' : 'rgba(255,255,255,0.05)'}`,
-                  color: activeProjectId === proj.id ? '#fff9ef' : '#a89984',
-                  transform: `rotate(${(parseInt((proj.id || '0').slice(-1), 36) % 5 - 2) * 0.8}deg)`,
-                  transition: 'transform 0.2s cubic-bezier(0.34,1.56,0.64,1), background 0.15s, border-color 0.15s',
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.transform = 'rotate(0deg) scale(1.08)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.transform = `rotate(${(parseInt((proj.id || '0').slice(-1), 36) % 5 - 2) * 0.8}deg)`; }}
+              <IconTile
+                key={proj.id}
+                title={`Load: ${proj.name}`}
+                onClick={() => loadProject(proj.id)}
+                active={activeProjectId === proj.id}
+                rotSeed={proj.id}
               >
                 <Film size={14} />
-              </div>
+              </IconTile>
             ))}
 
             {isSidebarCollapsed && (mode === 'clone' || mode === 'design') && (mode === 'clone' ? filteredProfiles.filter(p => !p.instruct) : filteredProfiles.filter(p => !!p.instruct)).map(proj => (
-              <div key={proj.id} title={`Select: ${proj.name}`} onClick={() => handleSelectProfile(proj)}
-                style={{
-                  width: '34px', height: '34px', flexShrink: 0, display: 'flex', justifyContent: 'center', alignItems: 'center',
-                  borderRadius: '12px 16px 10px 18px / 14px 10px 16px 12px',
-                  cursor: 'pointer', position: 'relative',
-                  background: selectedProfile === proj.id
-                    ? 'linear-gradient(140deg, rgba(243,165,182,0.25), rgba(250,189,47,0.15))'
-                    : 'rgba(255,255,255,0.04)',
-                  border: `1px solid ${selectedProfile === proj.id ? 'rgba(243,165,182,0.4)' : 'rgba(255,255,255,0.05)'}`,
-                  color: selectedProfile === proj.id ? '#fff9ef' : '#a89984',
-                  transform: `rotate(${(parseInt((proj.id || '0').slice(-1), 36) % 5 - 2) * 0.8}deg)`,
-                  transition: 'transform 0.2s cubic-bezier(0.34,1.56,0.64,1), background 0.15s, border-color 0.15s',
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.transform = 'rotate(0deg) scale(1.08)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.transform = `rotate(${(parseInt((proj.id || '0').slice(-1), 36) % 5 - 2) * 0.8}deg)`; }}
+              <IconTile
+                key={proj.id}
+                title={`Select: ${proj.name}`}
+                onClick={() => handleSelectProfile(proj)}
+                active={selectedProfile === proj.id}
+                rotSeed={proj.id}
               >
                 {mode === 'clone' ? <Fingerprint size={14} /> : <Wand2 size={14} />}
-                {proj.is_locked ? <Lock size={8} style={{ position: 'absolute', bottom: 2, right: 2, color: '#b8bb26' }} /> : null}
-              </div>
+                {proj.is_locked && <Lock size={8} className="sidebar__icon-tile__lock" />}
+              </IconTile>
             ))}
           </>
         )}
@@ -327,13 +291,13 @@ export default function Sidebar(props) {
         {/* ── HISTORY TAB ── */}
         {sidebarTab === 'history' && (
           <>
-            {!isSidebarCollapsed && <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginBottom: 8 }}>Generation history · Stored in SQLite</div>}
+            {!isSidebarCollapsed && <div className="sidebar__subtitle">Generation history · Stored in SQLite</div>}
             {(history.length + dubHistory.length) === 0 ? (
-              <div style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '24px 12px' }}>
-                <History size={28} style={{ opacity: 0.3, marginBottom: 8 }} />
-                <p style={{ fontSize: '0.78rem', margin: 0, marginBottom: 4 }}>No generation history</p>
-                <p style={{ fontSize: '0.62rem', margin: 0, opacity: 0.6 }}>Synthesize audio or dub a video — results will appear here.</p>
-              </div>
+              <EmptyState
+                icon={History}
+                title="No generation history"
+                hint="Synthesize audio or dub a video — results will appear here."
+              />
             ) : (
               <>
                 {!isSidebarCollapsed && filteredDubHistory.map(item => (
@@ -435,10 +399,16 @@ export default function Sidebar(props) {
             ))}
 
             {(history.length + dubHistory.length) > 0 && !isSidebarCollapsed && (
-              <button onClick={handleClearHistory}
-                style={{ width: '100%', marginTop: 10, padding: 5, background: 'transparent', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 6, color: '#665c54', cursor: 'pointer', fontSize: '0.65rem' }}>
-                <Trash2 size={10} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Clear History
-              </button>
+              <Button
+                variant="ghost"
+                size="sm"
+                block
+                onClick={handleClearHistory}
+                leading={<Trash2 size={10} />}
+                className="sidebar__clear"
+              >
+                Clear History
+              </Button>
             )}
           </>
         )}
@@ -446,13 +416,13 @@ export default function Sidebar(props) {
         {/* ── DOWNLOADS TAB ── */}
         {sidebarTab === 'downloads' && (
           <>
-            {!isSidebarCollapsed && <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginBottom: 8 }}>Recent Exports</div>}
+            {!isSidebarCollapsed && <div className="sidebar__subtitle">Recent Exports</div>}
             {exportHistory.length === 0 ? (
-              <div style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '24px 12px' }}>
-                <DownloadCloud size={28} style={{ opacity: 0.3, marginBottom: 8 }} />
-                <p style={{ fontSize: '0.78rem', margin: 0, marginBottom: 4 }}>No downloaded outputs</p>
-                <p style={{ fontSize: '0.62rem', margin: 0, opacity: 0.6 }}>Export a file via Tauri to see it tracked here.</p>
-              </div>
+              <EmptyState
+                icon={DownloadCloud}
+                title="No downloaded outputs"
+                hint="Export a file via Tauri to see it tracked here."
+              />
             ) : (
               <>
                 {!isSidebarCollapsed && filteredExport.map(item => {
@@ -495,6 +465,37 @@ export default function Sidebar(props) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * EmptyState — shared "nothing here yet" card across the three sidebar tabs.
+ */
+function EmptyState({ icon: Icon, title, hint }) {
+  return (
+    <div className="sidebar__empty">
+      <Icon size={28} className="sidebar__empty-icon" />
+      <p className="sidebar__empty-title">{title}</p>
+      <p className="sidebar__empty-sub">{hint}</p>
+    </div>
+  );
+}
+
+/**
+ * IconTile — hand-drawn sticker-style tile used in the collapsed-sidebar grid.
+ * Deterministic rotation based on the id's last char keeps tiles wonky but stable.
+ */
+function IconTile({ children, title, onClick, active, rotSeed }) {
+  const tilt = ((parseInt((rotSeed || '0').slice(-1), 36) % 5) - 2) * 0.8;
+  return (
+    <div
+      title={title}
+      onClick={onClick}
+      className={`sidebar__icon-tile ${active ? 'is-active' : ''}`}
+      style={{ transform: `rotate(${tilt}deg)` }}
+    >
+      {children}
     </div>
   );
 }

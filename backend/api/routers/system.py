@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 import torch
 import shutil
 
-from core.config import OUTPUTS_DIR, DATA_DIR, CRASH_LOG_PATH, IDLE_TIMEOUT_SECONDS
+from core.config import OUTPUTS_DIR, DATA_DIR, CRASH_LOG_PATH, LOG_PATH, IDLE_TIMEOUT_SECONDS
 from services.model_manager import get_model_status, get_best_device
 from services.ffmpeg_utils import find_ffmpeg, run_ffmpeg
 
@@ -46,56 +46,79 @@ def system_info():
     }
 
 
+def _tail_file(path: str, tail: int):
+    """Read the last `tail` lines from `path`. Returns (lines, total)."""
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        all_lines = f.readlines()
+    return all_lines[-tail:], len(all_lines)
+
+
+def _tauri_log_candidates():
+    """Likely paths for Tauri-side logs, most useful first.
+
+    `tauri-plugin-log` writes to `~/Library/Logs/<bundle_id>/<file_name>.log`
+    by default on macOS. Our bundle id is `com.debpalash.omnivoice-studio`
+    (see frontend/src-tauri/tauri.conf.json). lib.rs also redirects the
+    spawned backend's stdout/stderr to `~/Library/Logs/OmniVoice/backend.log`
+    which is where `print()` calls and uvicorn startup banners land.
+    """
+    home = os.path.expanduser("~")
+    bid = "com.debpalash.omnivoice-studio"
+    if sys.platform == "darwin":
+        return [
+            os.path.join(home, "Library/Logs", bid, "tauri.log"),
+            os.path.join(home, "Library/Logs", bid, "OmniVoice Studio.log"),
+            os.path.join(home, "Library/Logs/OmniVoice/backend.log"),
+            os.path.join(home, "Library/Logs/OmniVoice/backend_err.log"),
+        ]
+    if sys.platform.startswith("linux"):
+        return [
+            os.path.join(home, ".local/share", bid, "logs", "tauri.log"),
+            os.path.join(home, ".config", bid, "logs", "tauri.log"),
+        ]
+    if sys.platform.startswith("win"):
+        appdata = os.environ.get("APPDATA", home)
+        return [
+            os.path.join(appdata, bid, "logs", "tauri.log"),
+        ]
+    return []
+
+
 @router.get("/system/logs")
 def system_logs(tail: int = 200):
-    """Tail the crash log file (last N lines). Safe: bounded read."""
+    """Tail the rolling runtime log — everything Python logged since last rotation.
+
+    Back-stop: if the rolling log doesn't exist yet (fresh install, disk error),
+    fall back to the crash log so the UI always has something to show.
+    """
     try:
         tail = max(10, min(2000, int(tail)))
     except Exception:
         tail = 200
-    if not os.path.exists(CRASH_LOG_PATH):
-        return {"lines": [], "path": CRASH_LOG_PATH, "exists": False}
+
+    path = LOG_PATH if os.path.exists(LOG_PATH) else CRASH_LOG_PATH
+    if not os.path.exists(path):
+        return {"lines": [], "path": LOG_PATH, "exists": False}
     try:
-        # Read file then keep last N lines — crash logs are small in practice.
-        with open(CRASH_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
-            all_lines = f.readlines()
-        sliced = all_lines[-tail:]
-        return {"lines": sliced, "path": CRASH_LOG_PATH, "exists": True, "total_lines": len(all_lines)}
+        lines, total = _tail_file(path, tail)
+        return {"lines": lines, "path": path, "exists": True, "total_lines": total}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/system/logs/tauri")
 def system_logs_tauri(tail: int = 200):
-    """Tail the Tauri (webview host) log if present. Paths per platform."""
+    """Tail the Tauri plugin log (or backend stdout redirect, whichever exists)."""
     try:
         tail = max(10, min(2000, int(tail)))
     except Exception:
         tail = 200
-    # Probable Tauri log locations — bundle identifier usually mirrors product name.
-    candidates = []
-    home = os.path.expanduser("~")
-    if sys.platform == "darwin":
-        candidates += [
-            os.path.join(home, "Library/Logs/com.omnivoice.studio/OmniVoice.log"),
-            os.path.join(home, "Library/Logs/OmniVoice/OmniVoice.log"),
-            os.path.join(home, "Library/Logs/com.tauri.dev/OmniVoice.log"),
-        ]
-    elif sys.platform.startswith("linux"):
-        candidates += [
-            os.path.join(home, ".local/share/com.omnivoice.studio/logs/OmniVoice.log"),
-            os.path.join(home, ".config/com.omnivoice.studio/logs/OmniVoice.log"),
-        ]
-    elif sys.platform.startswith("win"):
-        candidates += [
-            os.path.join(os.environ.get("APPDATA", home), "com.omnivoice.studio", "logs", "OmniVoice.log"),
-        ]
+    candidates = _tauri_log_candidates()
     for p in candidates:
         if os.path.exists(p):
             try:
-                with open(p, "r", encoding="utf-8", errors="replace") as f:
-                    all_lines = f.readlines()
-                return {"lines": all_lines[-tail:], "path": p, "exists": True, "total_lines": len(all_lines)}
+                lines, total = _tail_file(p, tail)
+                return {"lines": lines, "path": p, "exists": True, "total_lines": total}
             except Exception as e:
                 return {"lines": [], "path": p, "exists": True, "error": str(e)}
     return {"lines": [], "path": None, "exists": False, "candidates": candidates}
@@ -103,14 +126,32 @@ def system_logs_tauri(tail: int = 200):
 
 @router.post("/system/logs/clear")
 def clear_system_logs():
-    if os.path.exists(CRASH_LOG_PATH):
-        try:
-            with open(CRASH_LOG_PATH, "w") as f:
-                f.truncate(0)
-            return {"cleared": True}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-    return {"cleared": False}
+    """Truncate the rolling runtime log and the crash log (what the Backend tab reads)."""
+    cleared_any = False
+    for p in (LOG_PATH, CRASH_LOG_PATH):
+        if os.path.exists(p):
+            try:
+                with open(p, "w") as f:
+                    f.truncate(0)
+                cleared_any = True
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"{p}: {e}")
+    return {"cleared": cleared_any}
+
+
+@router.post("/system/logs/tauri/clear")
+def clear_tauri_logs():
+    """Truncate whichever Tauri-side log files we know about. OS-level rotation may recreate them."""
+    cleared = []
+    for p in _tauri_log_candidates():
+        if os.path.exists(p):
+            try:
+                with open(p, "w") as f:
+                    f.truncate(0)
+                cleared.append(p)
+            except Exception:
+                pass
+    return {"cleared": cleared}
 
 @router.get("/sysinfo")
 def get_sys_info():

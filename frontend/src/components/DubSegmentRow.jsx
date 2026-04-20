@@ -1,8 +1,9 @@
 import React, { memo } from 'react';
-import { CheckCircle, AlertCircle, Circle, Trash2, Loader, Headphones, Scissors, Merge } from 'lucide-react';
+import { CheckCircle, AlertCircle, Circle, Trash2, Loader, Headphones, Scissors, Merge, MoreHorizontal } from 'lucide-react';
 import { formatTime } from '../utils/format';
 import { LANG_CODES } from '../utils/languages';
 import { PRESETS } from '../utils/constants';
+import { Menu, Button } from '../ui';
 
 const CHAR_BUDGET_RATIO = 1.3;
 
@@ -160,25 +161,7 @@ function DubSegmentRow({
         }}
       />
 
-      <div style={{ display: 'flex', gap: 1, width: 62 }}>
-        <button
-          className="segment-play"
-          disabled={disabled}
-          title="Split at cursor in text (Ctrl+D)"
-          onClick={() => onSplit(seg.id, Math.floor(seg.text.length / 2))}
-          style={{ padding: '0 3px' }}
-        >
-          <Scissors size={9} />
-        </button>
-        <button
-          className="segment-play"
-          disabled={disabled || !canMerge}
-          title="Merge with next (Ctrl+M)"
-          onClick={() => onMerge(seg.id)}
-          style={{ padding: '0 3px', opacity: canMerge ? 1 : 0.3 }}
-        >
-          <Merge size={9} />
-        </button>
+      <div style={{ display: 'flex', gap: 1, width: 54 }}>
         <button
           className="segment-play"
           disabled={disabled}
@@ -187,6 +170,35 @@ function DubSegmentRow({
         >
           {previewLoading ? <Loader className="spinner" size={9} /> : <Headphones size={9} />}
         </button>
+        <Menu
+          placement="bottom-end"
+          disabled={disabled}
+          items={[
+            {
+              id: 'split',
+              label: 'Split at cursor',
+              icon: Scissors,
+              shortcut: '⌘D',
+              onSelect: () => onSplit(seg.id, Math.floor(seg.text.length / 2)),
+            },
+            {
+              id: 'merge',
+              label: 'Merge with next',
+              icon: Merge,
+              shortcut: '⌘M',
+              disabled: !canMerge,
+              onSelect: () => onMerge(seg.id),
+            },
+          ]}
+        >
+          <button
+            className="segment-play"
+            disabled={disabled}
+            title="More actions"
+          >
+            <MoreHorizontal size={9} />
+          </button>
+        </Menu>
         <button
           className="segment-del"
           disabled={disabled}

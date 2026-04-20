@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Scissors, X, Play, Pause, Check, ZoomIn, ZoomOut, Maximize2, Repeat } from 'lucide-react';
+import { Scissors, Play, Pause, Check, ZoomIn, ZoomOut, Maximize2, Repeat } from 'lucide-react';
 import {
   clamp, encodeWav, computePeaksFromChannel, computePeaksAsync, pickTickInterval,
   xToTime as xToTimeUtil, pickHandle as pickHandleUtil,
   applyDrag as applyDragUtil, zoomAtCursor, zoomCenter, sliceToMono,
   decodeToMonoLowRate, DEFAULT_PEAK_BUCKETS,
 } from '../utils/audioTrim.js';
+import { Dialog, Button } from '../ui';
+import './AudioTrimmer.css';
 
 const EDGE_GRAB_PX = 10;
 
@@ -561,162 +563,114 @@ export default function AudioTrimmer({ file, maxSeconds = 15, onConfirm, onCance
   const duration_ms = Math.max(0, (end - start) * 1000);
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 9999,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
-    }} onClick={onCancel}>
-      <div
-        ref={containerRef}
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-        className="audio-trimmer"
-        style={{
-          background: 'linear-gradient(160deg, rgba(47,41,39,0.98), rgba(38,33,31,0.98))',
-          border: '1px solid rgba(243,165,182,0.18)',
-          borderRadius: '18px 22px 16px 24px / 20px 16px 22px 18px',
-          padding: 18, width: 'min(920px, 100%)', display: 'flex', flexDirection: 'column', gap: 10,
-          outline: 'none', boxShadow: '0 20px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(243,165,182,0.08)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#ebdbb2', fontWeight: 600, fontSize: '0.9rem' }}>
-            <Scissors size={15} color="#d3869b" /> Trim reference audio
-          </div>
-          <button onClick={onCancel} style={{ background: 'none', border: 'none', color: '#a89984', cursor: 'pointer' }}>
-            <X size={18} />
-          </button>
-        </div>
-
-        <div style={{ fontSize: '0.72rem', color: '#a89984', display: 'flex', gap: 14, alignItems: 'center' }}>
+    <Dialog
+      open
+      onClose={onCancel}
+      size="xl"
+      title={<><Scissors size={15} color="var(--color-brand)" /> Trim reference audio</>}
+    >
+      <div ref={containerRef} tabIndex={-1} className="audio-trimmer">
+        <div className="audio-trimmer__meta">
           <span>{decoding
             ? 'Decoding audio…'
             : (bufferRef.current
                 ? `Length ${fmtHMS(bufferRef.current.duration)} · ${bufferRef.current.sampleRate} Hz${peakProgress > 0 && peakProgress < 1 ? ` · rendering waveform ${Math.round(peakProgress * 100)}%` : ''}`
                 : '…')
           }</span>
-          <span style={{ marginLeft: 'auto', color: '#6b6657', fontSize: '0.66rem' }}>
+          <span className="audio-trimmer__hint">
             scroll = zoom · shift+scroll = pan · alt+drag = pan · ⏐ ⟵ ⟶ ⏐ keys adjust handles
           </span>
         </div>
 
-        {error && <div style={{ color: '#fb4934', fontSize: '0.8rem' }}>{error}</div>}
+        {error && <div className="audio-trimmer__error">{error}</div>}
 
         {/* Zoom controls */}
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <button onClick={zoomIn} disabled={!ready} title="Zoom in (+)" style={toolBtn}><ZoomIn size={12}/></button>
-          <button onClick={zoomOut} disabled={!ready} title="Zoom out (-)" style={toolBtn}><ZoomOut size={12}/></button>
-          <button onClick={fitAll} disabled={!ready} title="Fit all (Home)" style={toolBtn}><Maximize2 size={12}/></button>
-          <button onClick={fitSelection} disabled={!ready} title="Fit selection (End)" style={toolBtn}>
-            <span style={{ fontSize: '0.62rem', color: '#d3869b', fontWeight: 600 }}>FIT SEL</span>
-          </button>
-          <div style={{ marginLeft: 'auto', fontSize: '0.68rem', color: '#6b6657' }}>
+        <div className="audio-trimmer__toolbar">
+          <Button variant="subtle" iconSize="md" onClick={zoomIn}        disabled={!ready} title="Zoom in (+)"><ZoomIn size={12}/></Button>
+          <Button variant="subtle" iconSize="md" onClick={zoomOut}       disabled={!ready} title="Zoom out (-)"><ZoomOut size={12}/></Button>
+          <Button variant="subtle" iconSize="md" onClick={fitAll}        disabled={!ready} title="Fit all (Home)"><Maximize2 size={12}/></Button>
+          <Button variant="chip"   size="sm"    onClick={fitSelection} disabled={!ready} title="Fit selection (End)">FIT SEL</Button>
+          <div className="audio-trimmer__view-info">
             View {fmtHMS(viewStart)} → {fmtHMS(viewEnd)} ({fmtSec(viewEnd - viewStart, viewEnd - viewStart < 10 ? 2 : 0)})
           </div>
         </div>
 
         {/* Ruler */}
-        <canvas
-          ref={rulerRef}
-          style={{ width: '100%', height: 18, background: '#141414', borderRadius: 4, borderBottom: '1px solid rgba(255,255,255,0.05)' }}
-        />
+        <canvas ref={rulerRef} className="audio-trimmer__ruler" />
 
         {/* Waveform */}
-        <canvas
-          ref={waveRef}
-          onMouseDown={onCanvasDown}
-          style={{
-            width: '100%', height: 160, background: '#0f1112', borderRadius: 6,
-            border: '1px solid rgba(255,255,255,0.05)', cursor: 'crosshair', touchAction: 'none',
-          }}
-        />
+        <canvas ref={waveRef} onMouseDown={onCanvasDown} className="audio-trimmer__wave" />
 
         {/* Numeric fields */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 8, alignItems: 'center' }}>
-          <label style={fieldWrap}>
-            <span style={fieldLabel}>Start</span>
+        <div className="audio-trimmer__fields">
+          <label className="trim-field">
+            <span className="trim-field__label">Start</span>
             <input
               type="text" inputMode="decimal" value={startInput}
               onChange={(e) => setStartInput(e.target.value)}
               onBlur={commitStartInput}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitStartInput(); } }}
-              style={fieldInput}
+              className="trim-field__input"
             />
-            <span style={fieldUnit}>s</span>
+            <span className="trim-field__unit">s</span>
           </label>
-          <label style={fieldWrap}>
-            <span style={fieldLabel}>End</span>
+          <label className="trim-field">
+            <span className="trim-field__label">End</span>
             <input
               type="text" inputMode="decimal" value={endInput}
               onChange={(e) => setEndInput(e.target.value)}
               onBlur={commitEndInput}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEndInput(); } }}
-              style={fieldInput}
+              className="trim-field__input"
             />
-            <span style={fieldUnit}>s</span>
+            <span className="trim-field__unit">s</span>
           </label>
-          <div style={{ ...fieldWrap, cursor: 'default' }}>
-            <span style={fieldLabel}>Length</span>
-            <span style={{ ...fieldInput, background: 'transparent', border: 'none', color: tooLong ? '#fb4934' : '#b8bb26', padding: '4px 6px' }}>
+          <div className="trim-field trim-field--readonly">
+            <span className="trim-field__label">Length</span>
+            <span className={`trim-field__value ${tooLong ? 'is-err' : ''}`}>
               {(duration_ms / 1000).toFixed(2)}s
             </span>
-            <span style={fieldUnit}>{tooLong ? `>${maxSeconds}s` : tooShort ? 'too short' : 'ok'}</span>
+            <span className="trim-field__unit">{tooLong ? `>${maxSeconds}s` : tooShort ? 'too short' : 'ok'}</span>
           </div>
-          <button onClick={() => setLoop((v) => !v)} title="Loop preview"
-            style={{ ...toolBtn, borderColor: loop ? 'rgba(142,192,124,0.5)' : 'rgba(255,255,255,0.12)', color: loop ? '#8ec07c' : '#a89984' }}>
-            <Repeat size={12}/>
-          </button>
+          <Button
+            variant="icon"
+            iconSize="md"
+            active={loop}
+            onClick={() => setLoop((v) => !v)}
+            title="Loop preview"
+          >
+            <Repeat size={12} />
+          </Button>
         </div>
 
         {/* Play / Action row */}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button onClick={togglePlay} disabled={!ready} style={{
-            display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px',
-            background: 'rgba(142,192,124,0.08)', border: '1px solid rgba(142,192,124,0.3)',
-            borderRadius: 6, color: '#8ec07c', cursor: ready ? 'pointer' : 'not-allowed', fontSize: '0.78rem',
-          }}>
-            {playing ? <Pause size={12} /> : <Play size={12} />} {playing ? 'Pause' : 'Preview selection'}
-          </button>
-          <span style={{ fontSize: '0.7rem', color: '#6b6657' }}>Space to play · Enter to confirm · Esc to cancel</span>
+        <div className="audio-trimmer__actions">
+          <Button
+            variant="subtle"
+            onClick={togglePlay}
+            disabled={!ready}
+            leading={playing ? <Pause size={12} /> : <Play size={12} />}
+            style={{ color: 'var(--color-success)', borderColor: 'rgba(142,192,124,0.3)', background: 'rgba(142,192,124,0.08)' }}
+          >
+            {playing ? 'Pause' : 'Preview selection'}
+          </Button>
+          <span className="audio-trimmer__kbd-hint">Space to play · Enter to confirm · Esc to cancel</span>
 
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            <button onClick={onCancel} style={{
-              padding: '6px 12px', background: 'transparent', border: '1px solid rgba(255,255,255,0.12)',
-              borderRadius: 6, color: '#a89984', cursor: 'pointer', fontSize: '0.78rem',
-            }}>Cancel</button>
-            <button onClick={handleConfirm} disabled={!ready || tooLong || tooShort} style={{
-              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px',
-              background: (tooLong || tooShort) ? 'rgba(251,73,52,0.08)' : 'rgba(211,134,155,0.18)',
-              border: `1px solid ${(tooLong || tooShort) ? 'rgba(251,73,52,0.4)' : 'rgba(211,134,155,0.5)'}`,
-              borderRadius: 6, color: (tooLong || tooShort) ? '#fb4934' : '#d3869b',
-              cursor: (!ready || tooLong || tooShort) ? 'not-allowed' : 'pointer', fontSize: '0.78rem', fontWeight: 600,
-            }}>
-              <Check size={12} /> Use trimmed
-            </button>
+          <div className="audio-trimmer__actions-right">
+            <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+            <Button
+              variant={(tooLong || tooShort) ? 'danger' : 'primary'}
+              disabled={!ready || tooLong || tooShort}
+              onClick={handleConfirm}
+              leading={<Check size={12} />}
+            >
+              Use trimmed
+            </Button>
           </div>
         </div>
 
-        <audio ref={audioRef} preload="auto" onEnded={() => setPlaying(false)} style={{ display: 'none' }} />
+        <audio ref={audioRef} preload="auto" onEnded={() => setPlaying(false)} className="audio-trimmer__audio" />
       </div>
-    </div>
+    </Dialog>
   );
 }
-
-const toolBtn = {
-  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-  padding: '5px 8px', background: 'rgba(255,255,255,0.04)',
-  border: '1px solid rgba(255,255,255,0.08)', borderRadius: 5,
-  color: '#a89984', cursor: 'pointer', fontSize: '0.7rem',
-};
-
-const fieldWrap = {
-  display: 'flex', alignItems: 'center', gap: 4,
-  background: '#0f1112', border: '1px solid rgba(255,255,255,0.08)',
-  borderRadius: 5, padding: '2px 6px',
-};
-const fieldLabel = { fontSize: '0.62rem', color: '#6b6657', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 };
-const fieldInput = {
-  background: 'transparent', border: 'none', outline: 'none', color: '#ebdbb2',
-  fontSize: '0.78rem', padding: '4px 6px', width: '100%', minWidth: 60,
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-};
-const fieldUnit = { fontSize: '0.64rem', color: '#6b6657' };

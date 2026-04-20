@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Globe, Fingerprint, Wand2, Film, RefreshCw, Settings2, ChevronRight, Zap } from 'lucide-react';
+import { Button, Badge, Segmented } from '../ui';
 
 const VIEW_META = {
   launchpad: { label: 'Launchpad',       Icon: Globe,       accent: '#f3a5b6', kicker: 'Studio' },
@@ -64,18 +65,16 @@ export default function Header({
           ) : null}
         </div>
         {import.meta.env.DEV && (
-          <button
-            onClick={() => window.location.reload()}
+          <Button
+            variant="ghost"
+            size="sm"
             title="Force Reload UI"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 4, background: 'transparent',
-              border: '1px solid rgba(250,189,47,0.3)', color: '#fabd2f',
-              padding: '3px 8px', borderRadius: 999, fontSize: '0.55rem', cursor: 'pointer', flexShrink: 0,
-              fontFamily: 'Nunito, sans-serif', fontWeight: 700,
-            }}
+            onClick={() => window.location.reload()}
+            leading={<RefreshCw size={9} />}
+            style={{ flexShrink: 0 }}
           >
-            <RefreshCw size={9} /> Reload
-          </button>
+            Reload
+          </Button>
         )}
       </div>
 
@@ -101,24 +100,17 @@ export default function Header({
       {/* Right: wave + UI scale + sys stats */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', justifySelf: 'end', minWidth: 0, overflow: 'hidden' }}>
         <WaveBars color={view.accent} active={modelStatus === 'ready' || modelStatus === 'loading'} />
-        <div className="hq-scale" style={{ display: 'flex', gap: 2, background: 'rgba(0,0,0,0.28)', padding: 3, borderRadius: 999, border: '1px solid rgba(255,255,255,0.05)', flexShrink: 1 }}>
-          {[{ v: 1, l: 'S' }, { v: 1.3, l: 'M' }, { v: 1.5, l: 'L' }].map(({ v, l }) => (
-            <button
-              key={l}
-              onClick={() => setUiScale(v)}
-              style={{
-                fontFamily: 'Nunito, sans-serif',
-                fontSize: '0.6rem', fontWeight: 800,
-                padding: '2px 9px', border: 'none', borderRadius: 999, cursor: 'pointer',
-                background: uiScale === v ? 'rgba(243,165,182,0.25)' : 'transparent',
-                color: uiScale === v ? '#fff9ef' : '#7c6f64',
-                whiteSpace: 'nowrap', transition: 'background 0.15s ease, color 0.15s ease',
-              }}
-            >
-              {l}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          className="hq-scale"
+          size="xs"
+          value={uiScale}
+          onChange={setUiScale}
+          items={[
+            { value: 1,   label: 'S', title: 'Small UI scale'  },
+            { value: 1.3, label: 'M', title: 'Medium UI scale' },
+            { value: 1.5, label: 'L', title: 'Large UI scale'  },
+          ]}
+        />
         {sysStats && (
           <div className="hq-stats" style={{ display: 'flex', gap: '8px', fontFamily: 'Nunito, sans-serif', fontSize: '0.58rem', color: '#7c6f64', background: 'rgba(0,0,0,0.28)', padding: '3px 10px', borderRadius: 999, border: '1px solid rgba(255,255,255,0.05)', whiteSpace: 'nowrap', flexShrink: 1, alignItems: 'center', overflow: 'hidden' }}>
             <span><b style={{ color: '#a89984', fontWeight: 500 }}>RAM</b> {sysStats.ram.toFixed(1)}/{sysStats.total_ram.toFixed(0)}G</span>
@@ -126,40 +118,32 @@ export default function Header({
             <span style={{ borderLeft: '1px solid rgba(255,255,255,0.06)', paddingLeft: 5 }}>
               <b style={{ color: sysStats.gpu_active ? '#8ec07c' : '#a89984', fontWeight: 500 }}>VRAM</b> {sysStats.vram.toFixed(1)}G
             </span>
-            <span style={{ borderLeft: '1px solid rgba(255,255,255,0.06)', paddingLeft: 5, display: 'flex', alignItems: 'center', gap: 3 }}>
-              <span
-                style={{
-                  width: 5, height: 5, borderRadius: '50%', display: 'inline-block',
-                  background: modelStatus === 'ready' ? '#8ec07c' : modelStatus === 'loading' ? '#fabd2f' : '#504945',
-                  boxShadow: modelStatus === 'loading' ? '0 0 4px rgba(250,189,47,0.4)' : 'none',
-                  animation: modelStatus === 'loading' ? 'pulse 1.5s ease-in-out infinite' : 'none',
-                }}
-              />
-              <span style={{ color: modelStatus === 'ready' ? '#8ec07c' : modelStatus === 'loading' ? '#fabd2f' : '#504945' }}>
+            <span style={{ borderLeft: '1px solid rgba(255,255,255,0.06)', paddingLeft: 5, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Badge
+                tone={modelStatus === 'ready' ? 'success' : modelStatus === 'loading' ? 'warn' : 'neutral'}
+                size="xs"
+                dot
+                className={modelStatus === 'loading' ? 'ui-badge--pulse' : ''}
+                style={{ border: 'none', background: 'transparent', padding: 0, textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}
+              >
                 {modelStatus === 'ready' ? 'Ready' : modelStatus === 'loading' ? 'Loading…' : 'Idle'}
-              </span>
+              </Badge>
             </span>
             {onFlushMemory && (
-              <button
+              <Button
+                variant="subtle"
+                size="sm"
                 title="Flush RAM/VRAM caches. Alt+Click to also unload model."
-                disabled={flushing}
+                loading={flushing}
+                leading={!flushing && <Zap size={8} />}
                 onClick={async (e) => {
                   setFlushing(true);
                   try { await onFlushMemory(e.altKey); } finally { setFlushing(false); }
                 }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 2, padding: '1px 6px',
-                  background: flushing ? 'rgba(250,189,47,0.15)' : 'rgba(255,255,255,0.04)',
-                  border: `1px solid ${flushing ? 'rgba(250,189,47,0.3)' : 'rgba(255,255,255,0.08)'}`,
-                  borderRadius: 999, cursor: flushing ? 'wait' : 'pointer',
-                  color: flushing ? '#fabd2f' : '#7c6f64', fontSize: '0.55rem', fontWeight: 700,
-                  fontFamily: 'Nunito, sans-serif', transition: 'all 0.15s ease',
-                  marginLeft: 2,
-                }}
+                style={{ marginLeft: 2 }}
               >
-                <Zap size={8} style={flushing ? { animation: 'pulse 0.8s ease-in-out infinite' } : {}} />
-                {flushing ? '…' : 'Flush'}
-              </button>
+                Flush
+              </Button>
             )}
           </div>
         )}

@@ -2876,6 +2876,7 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
+    { name = "alembic" },
     { name = "demucs" },
     { name = "gradio" },
     { name = "imageio-ffmpeg" },
@@ -2929,6 +2930,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate" },
+    { name = "alembic", specifier = ">=1.13" },
     { name = "demucs", specifier = ">=4.0.1" },
     { name = "fastapi", marker = "extra == 'api'" },
     { name = "funasr", marker = "extra == 'eval'" },

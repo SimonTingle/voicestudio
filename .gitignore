@@ -1,58 +1,73 @@
+# ─────────────────────────────────────────────────────────────────────────
+#  Python
+# ─────────────────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
-*.egg-info/
+*.so
 *.egg
-dist/
-build/
+*.egg-info/
 .venv/
-.env
-.DS_Store
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-*.so
-/.cache*
-/exp*/
-/.tmp/
-/results/
-/data/
-/download
-/local/
-/run*
-example.py
-results/
-examples/data*
-examples/download*
-examples/exp*/
-.claude/
-*.wav
-*.jsonl
+dist/
+build/
 
-# Node/Turborepo/Bun
+# ─────────────────────────────────────────────────────────────────────────
+#  Node / Turborepo / Tauri
+# ─────────────────────────────────────────────────────────────────────────
 node_modules/
 .turbo/
-bun.lock
 bun.lockb
+frontend/src-tauri/target/
 
-# Generated logs and binaries
+# ─────────────────────────────────────────────────────────────────────────
+#  Secrets & env
+# ─────────────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─────────────────────────────────────────────────────────────────────────
+#  OS junk
+# ─────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─────────────────────────────────────────────────────────────────────────
+#  Editor / tool caches
+# ─────────────────────────────────────────────────────────────────────────
+.claude/
+/.cache*
+/.tmp/
+
+# ─────────────────────────────────────────────────────────────────────────
+#  Runtime data & artifacts
+#  (app-local state — safe to regenerate)
+# ─────────────────────────────────────────────────────────────────────────
+omnivoice_data/
+/data/
+/local/
+/results/
+/download
+/run*
+*.db
+*.db-shm
+*.db-wal
 *.log
-crash_log.txt
+*.wav
+*.jsonl
+demo_recording.webp
 cloudflared
 cloudflared.tgz
 
-# Root-level ad-hoc test scripts (should live in /tests)
-/test_crash.py
-/test_mock.py
-/test_pyannote.py
-/test_server.py
-/test_whisper.py
-
-# Data directories and sqlite db
-omnivoice_data/
-*.db
-demo_recording.webp
-
-# Local archives / reference clones
+# ─────────────────────────────────────────────────────────────────────────
+#  Reference / experiment scratch
+# ─────────────────────────────────────────────────────────────────────────
+/exp*/
+example.py
+examples/data*
+examples/download*
+examples/exp*/
 omnivoice.zip
-/research/

@@ -1,12 +1,14 @@
 import React from 'react';
 import {
   PanelLeftOpen, PanelLeftClose, Command, Globe, SlidersHorizontal, Volume2, User,
-  UploadCloud, Loader, Square, Mic, Save, UserSquare2, Settings2, ChevronUp, ChevronDown,
-  Sparkles, Play, Trash2,
+  UploadCloud, Square, Mic, Save, UserSquare2, Settings2, ChevronUp, ChevronDown,
+  Sparkles, Play, Trash2, X,
 } from 'lucide-react';
 import SearchableSelect from '../components/SearchableSelect';
 import ALL_LANGUAGES from '../languages.json';
 import { POPULAR_LANGS, PRESETS, TAGS, CATEGORIES } from '../utils/constants';
+import { Button, Input, Slider, Progress } from '../ui';
+import './CloneDesignTab.css';
 
 export default function CloneDesignTab(props) {
   const {
@@ -50,20 +52,16 @@ export default function CloneDesignTab(props) {
       <div className="studio-column">
         <div className="studio-panel">
           <div className="label-row" style={{ alignItems: 'center' }}>
-            <button
+            <Button
+              variant="icon"
+              iconSize="sm"
+              active={isSidebarCollapsed}
               onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '3px',
-                marginRight: '6px',
-                background: isSidebarCollapsed ? 'rgba(211,134,155,0.1)' : 'rgba(255,255,255,0.05)',
-                border: `1px solid ${isSidebarCollapsed ? 'rgba(211,134,155,0.3)' : 'rgba(255,255,255,0.08)'}`,
-                color: isSidebarCollapsed ? '#d3869b' : '#a89984',
-                borderRadius: 4, cursor: 'pointer',
-              }}
               title="Toggle Sidebar"
+              style={{ marginRight: 6 }}
             >
               {isSidebarCollapsed ? <PanelLeftOpen size={12} /> : <PanelLeftClose size={12} />}
-            </button>
+            </Button>
             <Command className="label-icon" size={14} /> Prompt
           </div>
           {mode === 'design' && (
@@ -139,8 +137,10 @@ export default function CloneDesignTab(props) {
                     >
                       <User size={10} /> {p.name}
                       <button
+                        type="button"
                         onClick={(e) => { e.stopPropagation(); handleDeleteProfile(p.id); }}
-                        style={{ position: 'absolute', top: 2, right: 2, background: 'none', border: 'none', color: '#fb4934', cursor: 'pointer', padding: 0 }}
+                        className="clone-profile-delete"
+                        aria-label="Delete profile"
                       >
                         <Trash2 size={10} />
                       </button>
@@ -178,54 +178,29 @@ export default function CloneDesignTab(props) {
                   <p>{refAudio ? <span style={{ color: '#ebdbb2' }}>{refAudio.name}</span> : 'Drop audio here — or click. WAV, MP3, M4A… 🎤'}</p>
                 </label>
 
-                {/* Mic Record Button */}
-                {isCleaning ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '8px 16px', background: 'rgba(184,187,38,0.1)', border: '1px solid rgba(184,187,38,0.2)', borderRadius: 8, gap: 4, minWidth: 70 }}>
-                    <Loader size={18} color="#b8bb26" style={{ animation: 'spin 1s linear infinite' }} />
-                    <span style={{ fontSize: '0.6rem', color: '#b8bb26' }}>Cleaning...</span>
-                  </div>
-                ) : isRecording ? (
-                  <button
-                    onClick={stopRecording}
-                    style={{
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
-                      padding: '8px 16px', background: 'rgba(251,73,52,0.15)', border: '2px solid #fb4934',
-                      borderRadius: 8, cursor: 'pointer', color: '#fb4934', minWidth: 70,
-                      animation: 'pulse 1s ease-in-out infinite',
-                    }}
-                  >
-                    <Square size={18} fill="#fb4934" />
-                    <span style={{ fontSize: '0.65rem', fontWeight: 600 }}>{recordingTime}s</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={startRecording}
-                    style={{
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
-                      padding: '8px 16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: 8, cursor: 'pointer', color: '#a89984', minWidth: 70,
-                      transition: 'all 0.2s',
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = '#fb4934'; e.currentTarget.style.color = '#fb4934'; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; e.currentTarget.style.color = '#a89984'; }}
-                    title="Record your voice for cloning"
-                  >
-                    <Mic size={18} />
-                    <span style={{ fontSize: '0.6rem' }}>Record</span>
-                  </button>
-                )}
+                <MicButton
+                  isCleaning={isCleaning}
+                  isRecording={isRecording}
+                  recordingTime={recordingTime}
+                  onStart={startRecording}
+                  onStop={stopRecording}
+                />
               </div>
             )}
 
             {selectedProfile && (
-              <div style={{ padding: 8, background: 'rgba(142,192,124,0.08)', border: '1px solid rgba(142,192,124,0.2)', borderRadius: 6, fontSize: '0.8rem', marginBottom: 8 }}>
-                <span style={{ color: '#8ec07c' }}>Using profile: {profiles.find(p => p.id === selectedProfile)?.name}</span>
-                <button
+              <div className="clone-profile-banner">
+                <span className="clone-profile-banner__label">
+                  Using profile: {profiles.find(p => p.id === selectedProfile)?.name}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setSelectedProfile(null)}
-                  style={{ marginLeft: 8, background: 'none', border: 'none', color: '#a89984', cursor: 'pointer', fontSize: '0.75rem', textDecoration: 'underline' }}
+                  leading={<X size={11} />}
                 >
                   clear
-                </button>
+                </Button>
               </div>
             )}
 
@@ -242,35 +217,26 @@ export default function CloneDesignTab(props) {
 
             {/* Save as profile */}
             {refAudio && !selectedProfile && (
-              <div style={{ marginTop: 8 }}>
+              <div className="clone-save-profile">
                 {!showSaveProfile ? (
-                  <button
+                  <Button
+                    variant="subtle"
+                    size="sm"
                     onClick={() => setShowSaveProfile(true)}
-                    style={{ background: 'none', border: '1px solid rgba(142,192,124,0.3)', color: '#8ec07c', fontSize: '0.75rem', padding: '4px 10px', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                    leading={<Save size={12} />}
                   >
-                    <Save size={12} /> Save as Voice Profile
-                  </button>
+                    Save as Voice Profile
+                  </Button>
                 ) : (
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <input
-                      className="input-base"
-                      style={{ flex: 1, fontSize: '0.8rem', padding: '4px 8px' }}
-                      placeholder="Profile name..."
+                  <div className="clone-save-profile__row">
+                    <Input
+                      size="sm"
+                      placeholder="Profile name…"
                       value={profileName}
                       onChange={e => setProfileName(e.target.value)}
                     />
-                    <button
-                      onClick={handleSaveProfile}
-                      style={{ background: 'rgba(142,192,124,0.2)', border: '1px solid rgba(142,192,124,0.4)', color: '#8ec07c', fontSize: '0.75rem', padding: '4px 10px', borderRadius: 6, cursor: 'pointer' }}
-                    >
-                      Save
-                    </button>
-                    <button
-                      onClick={() => setShowSaveProfile(false)}
-                      style={{ background: 'none', border: 'none', color: '#a89984', cursor: 'pointer', fontSize: '0.75rem' }}
-                    >
-                      Cancel
-                    </button>
+                    <Button variant="subtle" size="sm" onClick={handleSaveProfile}>Save</Button>
+                    <Button variant="ghost"  size="sm" onClick={() => setShowSaveProfile(false)}>Cancel</Button>
                   </div>
                 )}
               </div>
@@ -369,17 +335,51 @@ export default function CloneDesignTab(props) {
           </div>
         )}
 
-        <button className="btn-primary" onClick={handleGenerate} disabled={isGenerating}>
-          {isGenerating ? <Sparkles className="spinner" size={16} /> : <Play size={16} />}
-          {isGenerating ? `Synthesizing... (${generationTime}s)` : 'Synthesize Audio'}
-        </button>
+        <Button
+          variant="primary"
+          block
+          loading={isGenerating}
+          onClick={handleGenerate}
+          leading={!isGenerating && <Play size={14} />}
+          style={{ marginTop: 6 }}
+        >
+          {isGenerating ? `Synthesizing… (${generationTime}s)` : 'Synthesize Audio'}
+        </Button>
         {isGenerating && (
-          <div className="progress-container">
-            <div className="progress-fill" style={{ width: `${Math.min((generationTime / 8) * 100, 95)}%` }} />
-          </div>
+          <Progress
+            value={Math.min((generationTime / 8) * 100, 95)}
+            tone="brand"
+            size="sm"
+            style={{ marginTop: 6 }}
+          />
         )}
         </div>
       </div>
     </div>
+  );
+}
+
+function MicButton({ isCleaning, isRecording, recordingTime, onStart, onStop }) {
+  if (isCleaning) {
+    return (
+      <div className="mic-btn mic-btn--cleaning">
+        <Sparkles size={18} className="spinner" />
+        <span>Cleaning…</span>
+      </div>
+    );
+  }
+  if (isRecording) {
+    return (
+      <button type="button" onClick={onStop} className="mic-btn mic-btn--recording">
+        <Square size={18} fill="currentColor" />
+        <span>{recordingTime}s</span>
+      </button>
+    );
+  }
+  return (
+    <button type="button" onClick={onStart} className="mic-btn mic-btn--idle" title="Record your voice for cloning">
+      <Mic size={18} />
+      <span>Record</span>
+    </button>
   );
 }
