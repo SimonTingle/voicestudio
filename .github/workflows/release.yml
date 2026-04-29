@@ -201,6 +201,48 @@ jobs:
       # installer ships the repo's pyproject.toml + uv.lock + backend/
       # tree as Tauri resources; lib.rs::ensure_venv_ready recreates the
       # venv on first launch via `uv sync --frozen --no-dev`.
+      # Fetch the standalone `uv` binary for the current matrix target and
+      # drop it at `binaries/uv-<rust-target-triple>{ext}`. tauri.conf.json
+      # references `binaries/uv` via `bundle.externalBin`, and tauri-bundler
+      # picks up the per-target file automatically. The runtime then uses
+      # the bundled binary instead of downloading uv on first launch.
+      #
+      # Pinned uv version mirrors the `UV_VERSION` constant in lib.rs; bump
+      # both together when refreshing.
+      - name: Bundle uv (${{ matrix.rust_target }})
+        shell: bash
+        env:
+          UV_VERSION: "0.11.7"
+          TRIPLE: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          mkdir -p frontend/src-tauri/binaries
+          case "$TRIPLE" in
+            aarch64-apple-darwin|x86_64-apple-darwin|x86_64-unknown-linux-gnu)
+              ARCHIVE="tar.gz"
+              ;;
+            x86_64-pc-windows-msvc)
+              ARCHIVE="zip"
+              ;;
+            *)
+              echo "Unsupported target for uv bundling: $TRIPLE"
+              exit 1
+              ;;
+          esac
+          URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${TRIPLE}.${ARCHIVE}"
+          echo "Fetching $URL"
+          WORK=$(mktemp -d)
+          if [ "$ARCHIVE" = "zip" ]; then
+            curl -fsSL "$URL" -o "$WORK/uv.zip"
+            unzip -j -o "$WORK/uv.zip" -d "$WORK"
+            mv "$WORK/uv.exe" "frontend/src-tauri/binaries/uv-${TRIPLE}.exe"
+          else
+            curl -fsSL "$URL" | tar -xz -C "$WORK"
+            mv "$WORK/uv-${TRIPLE}/uv" "frontend/src-tauri/binaries/uv-${TRIPLE}"
+            chmod +x "frontend/src-tauri/binaries/uv-${TRIPLE}"
+          fi
+          ls -la "frontend/src-tauri/binaries/"
+
       # Extract the matching CHANGELOG.md section so the release body has
       # real notes instead of "see commit log". Falls back to a one-liner
       # if the tag has no matching `## [X.Y.Z]` section yet — keeps the
