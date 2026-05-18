@@ -93,9 +93,14 @@ jobs:
         working-directory: frontend
         run: bun install
 
+      # Single-sourced typecheck command (mirrors ci.yml). The `typecheck:ci`
+      # script in frontend/package.json sets `--checkJs false` so pre-existing
+      # JS-side errors don't block the release; only .ts/.tsx files gate.
+      # Drift between CI and release-time typecheck flags broke v0.3.x release
+      # runs — keep this command identical to ci.yml's step.
       - name: Frontend typecheck
         working-directory: frontend
-        run: bunx tsc --noEmit
+        run: bun run typecheck:ci
 
       # Invoke node directly (not `bun run test`) because `bun run` auto-aliases
       # `node` to `bun` in script bodies, and bun doesn't support
