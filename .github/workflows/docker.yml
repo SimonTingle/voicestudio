@@ -1,16 +1,30 @@
 # Publish Docker images to GitHub Container Registry (GHCR).
 #
 # Triggers:
-#   - push of a tag matching `v*` (e.g. `v0.2.7`) → pushed as :0.2.7 + :latest
-#   - workflow_dispatch → pushed as :sha-<short> (for testing)
+#   - push of a tag matching `v*` (e.g. `v0.3.0`) → :0.3.0, :0.3, :latest, :sha-
+#   - push to main branch                          → :main, :sha- (rolling "edge" build)
+#   - workflow_dispatch                            → :sha- only (ad-hoc test build)
+#
+# Tag ↔ image mapping
+#   :latest   — always the most recent versioned release (set on every v* tag push)
+#   :0.3.0    — exact version from the git tag
+#   :0.3      — major.minor floating tag (updated on every patch within the minor)
+#   :main     — latest commit on main; may be ahead of the last tagged release
+#   :sha-xxxx — specific commit SHA; produced by workflow_dispatch
 #
 # Images land at: ghcr.io/debpalash/omnivoice-studio
+#
+# NOTE: the Docker image is the headless web-server build of OmniVoice (FastAPI
+# backend + pre-built React frontend served over HTTP).  The Tauri desktop
+# auto-updater and its update-channel toggle are desktop-only features; they do
+# NOT apply to the Docker image.
 
 name: Docker (GHCR)
 
 on:
   push:
     tags: ['v*']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -42,19 +56,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Extracts semver tags from the git ref:
-      #   v0.2.7 → 0.2.7, latest
-      #   manual dispatch → sha-abc1234
+      # Tag strategy (`:sha-<short>` is emitted on every trigger):
+      #   v0.3.0 tag push   → :0.3.0, :0.3, :latest, :sha-
+      #   main branch push  → :main, :sha-
+      #   workflow_dispatch → :sha- only
+      #
+      # Fix for stale :latest (issues #249, #251):
+      #   The previous rule used `enable={{is_default_branch}}`, which evaluates
+      #   to false on tag pushes (detached HEAD) — so :latest was never updated
+      #   when a release tag was pushed. The version / :latest / :main rules are
+      #   gated on `github.event_name == 'push'` so a manual workflow_dispatch can
+      #   only ever produce a throwaway `:sha-` tag (never republish a mutable
+      #   tag), and :latest additionally excludes prerelease tags (those contain a
+      #   `-`, e.g. v1.0.0-rc.1) so a prerelease can't clobber :latest.
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'push' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref_type == 'tag' && !contains(github.ref, '-') }}
+            type=raw,value=main,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
             type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
         uses: docker/build-push-action@v6
