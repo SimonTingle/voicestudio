@@ -271,6 +271,13 @@
   },
   "about": {
     "app": "App",
+    "self_check": "Run self-check",
+    "self_check_failed": "Self-check failed: {{message}}",
+    "self_check_ok": "OK",
+    "self_check_warn": "Warning",
+    "self_check_fail": "Failed",
+    "self_check_healthy": "All checks passed — this install looks healthy.",
+    "self_check_attention": "{{count}} check(s) failed — see the hints above.",
     "version": "Version",
     "tauri_runtime": "Tauri runtime",
     "platform": "Platform",
@@ -1092,7 +1099,8 @@
     "title": "This tab hit a snag.",
     "desc": "Don't worry — the rest of the app still works. You can switch tabs, or try again below.",
     "tryAgain": "Try again",
-    "openDocs": "Open docs for this error"
+    "openDocs": "Open docs for this error",
+    "report": "Report this bug"
   },
   "common": {
     "open": "Open",

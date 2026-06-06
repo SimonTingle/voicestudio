@@ -40,6 +40,57 @@ _is_cuda = torch.cuda.is_available()
 psutil.cpu_percent(interval=None)
 
 
+def _detect_cpu_model() -> str:
+    """Human-readable CPU model. platform.processor() is empty on most
+    Linux distros, so read /proc/cpuinfo there; sysctl on macOS."""
+    try:
+        if sys.platform.startswith("linux"):
+            with open("/proc/cpuinfo") as f:
+                for line in f:
+                    if line.lower().startswith("model name"):
+                        return line.split(":", 1)[1].strip()
+        if sys.platform == "darwin":
+            import subprocess
+            return subprocess.check_output(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], text=True, timeout=5
+            ).strip()
+        return platform.processor() or ""
+    except Exception:
+        return platform.processor() or ""
+
+
+def _detect_gpu() -> tuple[str, float]:
+    """(gpu_name, vram_total_gb) — static for the process lifetime.
+
+    MPS has unified memory, so there's no separate VRAM figure to report;
+    the name alone tells a bug-report reader what hardware this is.
+    """
+    try:
+        if _is_cuda:
+            props = torch.cuda.get_device_properties(0)
+            return torch.cuda.get_device_name(0), round(props.total_memory / (1024 ** 3), 1)
+        if _is_mac:
+            return "Apple Silicon (MPS)", 0.0
+    except Exception:
+        pass
+    return "", 0.0
+
+
+# Static hardware facts, captured once — /system/info is hit on every
+# Settings page load and must stay cheap.
+_CPU_MODEL = _detect_cpu_model()
+_GPU_NAME, _VRAM_TOTAL_GB = _detect_gpu()
+_RAM_TOTAL_GB = round(psutil.virtual_memory().total / (1024 ** 3), 1)
+_OS_VERSION = platform.platform()
+
+
+def _disk_free_gb() -> float:
+    try:
+        return round(shutil.disk_usage(DATA_DIR).free / (1024 ** 3), 1)
+    except Exception:
+        return 0.0
+
+
 def _ui_port() -> int:
     """The Vite UI dev-server port, single-sourced from OMNIVOICE_UI_PORT.
 
@@ -183,6 +234,13 @@ def system_info():
             "python": sys.version.split()[0],
             "platform": sys.platform,
             "arch": platform.machine(),
+            "os_version": _OS_VERSION,
+            "cpu_model": _CPU_MODEL,
+            "cpu_count": psutil.cpu_count(logical=True) or 0,
+            "ram_total_gb": _RAM_TOTAL_GB,
+            "gpu_name": _GPU_NAME,
+            "vram_total_gb": _VRAM_TOTAL_GB,
+            "disk_free_gb": _disk_free_gb(),
             "ffmpeg_ok": bool(_ffmpeg),
             "ffmpeg_path": _ffmpeg or "",
             "proxy_url": os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or "",
@@ -210,6 +268,13 @@ def system_info():
             "python": sys.version.split()[0],
             "platform": sys.platform,
             "arch": platform.machine(),
+            "os_version": _OS_VERSION,
+            "cpu_model": _CPU_MODEL,
+            "cpu_count": psutil.cpu_count(logical=True) or 0,
+            "ram_total_gb": _RAM_TOTAL_GB,
+            "gpu_name": _GPU_NAME,
+            "vram_total_gb": _VRAM_TOTAL_GB,
+            "disk_free_gb": _disk_free_gb(),
             "proxy_url": "",
             "share_enabled": network_share.get_state().enabled,
             "share_port": network_share.get_state().share_port,
@@ -787,6 +852,24 @@ def hf_token_state():
         "active": s["active"],
         "sources": [asdict(row) for row in s["sources"]],
     }
+
+
+# ── Self-check diagnostics ────────────────────────────────────────────────
+
+
+@router.get("/system/diagnose")
+async def system_diagnose(
+    network: bool = Query(True, description="Include the HuggingFace hub reachability probe"),
+):
+    """Run the self-check suite (core.diagnose) and return the structured report.
+
+    The hub probe can block up to ~5s, so the whole run goes through a
+    threadpool; pass ``network=false`` for an instant offline report.
+    Output is pre-scrubbed (core.scrub) — safe to paste into a GitHub issue.
+    """
+    from core.diagnose import run_diagnostics
+
+    return await asyncio.to_thread(run_diagnostics, network)
 
 
 # ── Phase 1 Wave 3 — macOS Gatekeeper quarantine probe (#54) ────────────

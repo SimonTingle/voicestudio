@@ -709,7 +709,21 @@ if __name__ == "__main__":
         help="Boot the server, poll /health, exit 0 on success / 1 on timeout. "
              "Used by the release-time installer smoke step in .github/workflows/release.yml.",
     )
+    parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="Run the self-check suite (device, ffmpeg, HF token, disk, engines, "
+             "network) without starting the server. Exit 0 if healthy, 1 if any "
+             "check fails. Output is scrubbed — safe to paste into a GitHub issue.",
+    )
     args, _unknown = parser.parse_known_args()
+
+    if args.diagnose:
+        from core.diagnose import run_diagnostics, format_text
+
+        _report = run_diagnostics()
+        print(format_text(_report), flush=True)
+        sys.exit(0 if _report["summary"]["ok"] else 1)
 
     # Single-sourced from OMNIVOICE_PORT so the bare `python main.py` path and
     # `--health-check` agree with the Rust sidecar / uvicorn-CLI `--port`.

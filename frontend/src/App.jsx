@@ -49,6 +49,7 @@ import useDubWorkflow from './hooks/useDubWorkflow';
 const LazyFallback = () => <div className="app-lazy-fallback">{i18n.t('app.loading')}</div>;
 
 import { Toaster, toast } from 'react-hot-toast';
+import { toastErrorWithReport } from './utils/errorToast';
 import {
   POPULAR_LANGS, POPULAR_ISO, TAGS, CATEGORIES, PRESETS, CLONE_MAX_SECONDS,
 } from './utils/constants';
@@ -561,7 +562,7 @@ function App() {
         } catch (err) { console.warn('exportRecord (browser export path) failed:', err); }
       } catch (err) {
         console.error(err);
-        toast.error(i18n.t('app.toast_export_failed', { message: err?.message || err }));
+        toastErrorWithReport(i18n.t('app.toast_export_failed', { message: err?.message || err }), err);
       }
       return;
     }
@@ -576,7 +577,7 @@ function App() {
       loadExportHistory();
     } catch (err) {
       console.error(err);
-      toast.error(i18n.t('app.toast_export_failed', { message: err?.message || err }));
+      toastErrorWithReport(i18n.t('app.toast_export_failed', { message: err?.message || err }), err);
     }
   };
   const revealInFolder = async (filePath) => {
