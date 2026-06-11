@@ -432,6 +432,12 @@ jobs:
           # only on the opt-in stable path, leaving them ABSENT (not "") on
           # preview/unsigned paths so Tauri's bundler skips cert import. A static
           # env: here would always set them to "" and break the mac build.
+          # Unsigned paths still get a VALID ad-hoc seal from tauri.conf.json
+          # (bundle.macOS.signingIdentity = "-"), so a downloaded build shows the
+          # GUI-bypassable "unidentified developer" prompt (right-click → Open /
+          # Settings → "Open Anyway") instead of the un-bypassable "damaged"
+          # error. On the signed path APPLE_SIGNING_IDENTITY (env) overrides the
+          # "-" default; once notarized, Gatekeeper accepts it with no prompt.
           # GH runners disable FUSE, so linuxdeploy's AppImage can't mount
           # itself at bundle time. This env tells linuxdeploy to extract-and-run
           # instead, which works without FUSE.
@@ -481,6 +487,35 @@ jobs:
           find "$APP/Contents" -type f -path '*/backend/main.py' | grep -q . || fail "backend source backend/main.py missing"
           echo "OK — bundle has shell + uv + backend resources"
           hdiutil detach "$MOUNT" || true
+
+      # ── Signing / Gatekeeper / notarization verification ──────────────
+      # Runs codesign --verify, spctl (Gatekeeper), nested-binary, and
+      # stapler checks against the built .app (see docs/macos-signing-verification.md).
+      # STRICT (--require-signed) only on the opt-in signed stable path — same
+      # condition as "Configure Apple signing" above — so a failed or missing
+      # signature/notarization FAILS the job and STOPS the release instead of
+      # publishing an unsigned artifact. On every other (unsigned dev/preview)
+      # path it runs report-only and never breaks the build.
+      - name: Verify macOS signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          STRICT: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.MACOS_SIGNING_ENABLED == 'true') && '1' || '0' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -uo pipefail
+          APP=$(find "frontend/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos" -maxdepth 1 -name '*.app' | head -1)
+          [ -n "$APP" ] || { echo "FAIL — no .app found to verify"; exit 1; }
+          MODE=""
+          if [ "$STRICT" = "1" ]; then
+            MODE="--require-signed"
+            echo "Signed stable release → STRICT verification (release stops on failure)."
+          else
+            echo "Unsigned dev/preview path → report-only verification."
+          fi
+          bash scripts/verify-macos-signing.sh "$APP" $MODE
 
       - name: Installer smoke (Windows)
         if: runner.os == 'Windows'
