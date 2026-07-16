@@ -43,7 +43,7 @@ on:
         required: false
         default: "true"
       publish_preview:
-        description: "Publish a rolling 'preview' prerelease (updater Preview channel) from the selected branch"
+        description: "Publish a rolling 'preview' prerelease (updater Preview channel). Previews ALWAYS build from main — dispatching from any other branch fails the preview-gate."
         required: false
         type: boolean
         default: false
@@ -148,6 +148,15 @@ jobs:
           set -euo pipefail
           event="${{ github.event_name }}"
           if [ "$event" = "schedule" ] || { [ "$event" = "workflow_dispatch" ] && [ "${{ inputs.publish_preview }}" = "true" ]; }; then
+            # Preview channel policy (owner-set 2026-07-16): previews ALWAYS
+            # build from main. The preview updater manifest and the Docker
+            # rolling tags (:latest/:main/:rocm) all track main — a preview
+            # cut from a side branch would desync the channels and could
+            # ship code that never merged. Merge to main first.
+            if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+              echo "::error::Preview builds publish from main only (got '${{ github.ref }}'). Merge to main, then dispatch with publish_preview=true."
+              exit 1
+            fi
             echo "is_preview=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_preview=false" >> "$GITHUB_OUTPUT"
