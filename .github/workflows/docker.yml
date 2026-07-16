@@ -58,16 +58,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The CUDA base + torch wheels + build layers no longer fit in the
-      # runner's default free space (first hit 2026-07-16: `uv pip install`
-      # died with ENOSPC while the ROCm job — which already had this step —
-      # passed). Same reclaim as the ROCm job: ~25-30 GB of toolchains this
-      # job never uses.
+      # Both image builds run right at the runner's disk ceiling (CUDA hit
+      # ENOSPC 2026-07-16 morning; ROCm hit it the same afternoon even with
+      # the original reclaim list). Reclaim everything these jobs can never
+      # use — ~40-45 GB total. Keep this list identical in both jobs.
       - name: Free runner disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+            /usr/local/.ghcup /opt/hostedtoolcache /usr/share/swift \
+            /usr/local/share/boost /usr/local/lib/node_modules
           sudo docker image prune --all --force
+          sudo apt-get clean
           df -h /
 
       # QEMU enables cross-platform builds (arm64 on x64 runner).
@@ -168,14 +169,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The ROCm base plus the built image don't fit in the runner's default
-      # free space. Drop the preinstalled toolchains this job never uses
-      # (~25-30 GB reclaimed).
+      # The ROCm base (~25 GB unpacked) plus build layers need every GB.
+      # Same reclaim list as the CUDA job above — keep them identical
+      # (2026-07-16: ROCm hit ENOSPC with the shorter list).
       - name: Free runner disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+            /usr/local/.ghcup /opt/hostedtoolcache /usr/share/swift \
+            /usr/local/share/boost /usr/local/lib/node_modules
           sudo docker image prune --all --force
+          sudo apt-get clean
           df -h /
 
       - name: Set up Docker Buildx
