@@ -58,6 +58,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The CUDA base + torch wheels + build layers no longer fit in the
+      # runner's default free space (first hit 2026-07-16: `uv pip install`
+      # died with ENOSPC while the ROCm job — which already had this step —
+      # passed). Same reclaim as the ROCm job: ~25-30 GB of toolchains this
+      # job never uses.
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
       # QEMU enables cross-platform builds (arm64 on x64 runner).
       # Skipped for now — only building linux/amd64.
       # - uses: docker/setup-qemu-action@v3
