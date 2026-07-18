@@ -63,8 +63,17 @@ jobs:
         # `uv sync` because smoke only hits /health + fixture profiles.
         run: uv sync --all-extras
 
+      # HF_HUB_OFFLINE=1 is a recurrence guard, not an optimization: a test
+      # that reaches huggingface.co fails fast and loud instead of silently
+      # downloading model weights mid-suite (the preload_model() Hub-probe
+      # bug pulled the full 2.3 GB k2-fsa/OmniVoice checkpoint into every
+      # networked empty-cache run before it was caught). All legitimate HF
+      # interactions in tests are stubbed; anything that trips this is a
+      # test-isolation bug.
       - name: Run pytest
         run: uv run pytest tests/ -q --tb=short
+        env:
+          HF_HUB_OFFLINE: "1"
 
       # Docs-drift CI gate (Phase 1 INST-06). The validator extracts code
       # blocks tagged `<!-- validate -->` from docs/install/*.md and asserts
@@ -80,6 +89,8 @@ jobs:
       # the separate session is kept for cheaper, clearer CI output.
       - name: Run pytest (backend/tests, isolated)
         run: uv run pytest backend/tests/ -q --tb=short
+        env:
+          HF_HUB_OFFLINE: "1"  # same no-silent-downloads guard as tests/
 
       # Cache ~/.bun/install/cache keyed on bun.lock — `bun install` drops
       # from ~15 s cold to near-instant on warm cache.
@@ -287,3 +298,5 @@ jobs:
 
       - name: Run smoke tests
         run: uv run pytest tests/smoke/ -q --tb=short
+        env:
+          HF_HUB_OFFLINE: "1"  # same no-silent-downloads guard as the main pytest job
