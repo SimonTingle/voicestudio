@@ -283,7 +283,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          choco install ffmpeg -y --no-progress
+          # The community chocolatey feed 504s intermittently (broke a PR run
+          # on 2026-07-20) — retry with backoff before failing the job.
+          for i in 1 2 3; do
+            choco install ffmpeg -y --no-progress && break
+            echo "choco attempt $i failed — retrying in $((i * 30))s"
+            sleep $((i * 30))
+          done
           ffmpeg -version
 
       - name: System deps (Linux)
