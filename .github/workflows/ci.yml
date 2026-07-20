@@ -142,6 +142,21 @@ jobs:
         working-directory: frontend
         run: node --experimental-strip-types --no-warnings --test ../tests/frontend/*.test.mjs
 
+      # Production-bundle blank-screen gate. Everything above runs UN-minified
+      # (dev server + Vitest/jsdom), so a crash that exists ONLY in the minified
+      # release bundle — a TDZ reorder that throws before React mounts — passes
+      # every check and ships a black screen. That is how v0.3.22 went out (#1178),
+      # and it recurred pre-0.3.23. This builds the real dist/ and asserts the app
+      # actually mounts into #root. See frontend/e2e-prod/prod-bundle-smoke.spec.ts.
+      # (The in-app root <ErrorBoundary> in main-app.jsx catches such throws at
+      # runtime; this gate stops them reaching a release in the first place.)
+      - name: Install Playwright chromium
+        working-directory: frontend
+        run: bunx playwright install --with-deps chromium
+      - name: Production-bundle smoke — no blank screen
+        working-directory: frontend
+        run: bun run test:prod-bundle
+
   # ── Cross-platform Tauri shell check ────────────────────────────────────
   # Catches platform-specific Rust regressions on PR (cfg(target_os=...)
   # gates, missing Windows/macOS deps, etc.) without spending the 15+ min
