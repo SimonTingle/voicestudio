@@ -820,7 +820,7 @@ jobs:
           BODY=$(printf '%s\n' "$BODY" | sed '/^## Contributors$/,$d' | sed 's/thanks @/thanks /g')
           {
             printf '%s' "$BODY"
-            printf '\n## Contributors\n\nRanked by merged pull requests in this release. Thank you all 💜\n\n'
+            printf '\n## Contributors\n\nThank you all 💜\n\n'
             while IFS= read -r h; do
               [ -z "$h" ] && continue
               printf '<a href="https://github.com/%s" title="@%s"><img src="https://github.com/%s.png?size=64" width="48" alt="@%s"/></a> ' "$h" "$h" "$h" "$h"
