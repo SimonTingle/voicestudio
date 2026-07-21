@@ -761,6 +761,75 @@ jobs:
             scripts/uninstall.sh scripts/uninstall.ps1 \
             --clobber --repo "${{ github.repository }}"
 
+  # ── Contributors avatar strip on STABLE releases ──────────────────────────
+  # Stable v* releases keep their curated CHANGELOG body + the per-platform
+  # checksums; this appends ONE "## Contributors" avatar strip crediting every
+  # PR author for the tag — including the owner — the courtesy the preview
+  # channel already gets (preview-notes job). It closes the gap where stable
+  # releases credited nobody.
+  #
+  # Two things the naive version got wrong (fixed here):
+  #   1. RANK by contribution. Authors are ordered by merged-PR count for the
+  #      tag (descending, ties broken by handle), not alphabetically — the
+  #      owner with 30+ PRs should not sort under a one-PR contributor.
+  #   2. Exactly ONE section. GitHub auto-renders its OWN "Contributors" widget
+  #      from any plain `@handle` TEXT mention in the body (the CHANGELOG's
+  #      "— thanks @user!" credits → `mentions_count`), which duplicates ours
+  #      and can't be ranked or include the owner. We neutralise those inline
+  #      text mentions in the RELEASE body only (`thanks @u` → `thanks u`; the
+  #      repo CHANGELOG keeps the @handles) so GitHub renders no native widget —
+  #      our ranked strip's @handles live in HTML attributes, which GitHub does
+  #      not count as mentions, so the linked avatars stay clickable.
+  #
+  # MUST append via `gh release edit` on the EXISTING release (never a second
+  # softprops publish — that races tauri-action's per-matrix draft and splits
+  # installers across two releases; see uninstall-scripts). `needs: [build]`
+  # guarantees the release + all checksum appends already landed, and this job
+  # is single (no matrix) so there is no write race. Idempotent: it strips any
+  # prior "## Contributors" block before re-appending, so re-runs don't stack.
+  contributors-strip:
+    needs: [build]
+    if: >-
+      github.event_name == 'push'
+      && startsWith(github.ref, 'refs/tags/v')
+      && !contains(github.ref, '-')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Append ranked Contributors avatar strip to the stable release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          NOTES=$(gh api --method POST "repos/$REPO/releases/generate-notes" -f tag_name="$TAG" --jq .body)
+          # Rank PR authors by merged-PR count (desc), ties broken by handle.
+          RANKED=$(printf '%s\n' "$NOTES" | grep -oE 'by @[A-Za-z0-9-]+' | sed 's/^by @//' \
+                     | sort | uniq -c | sort -k1,1nr -k2,2 | awk '{print $2}' || true)
+          if [ -z "$RANKED" ]; then
+            echo "No PR-author handles in the generated notes for $TAG — nothing to append."
+            exit 0
+          fi
+          # Current body: drop any prior Contributors block (idempotent re-runs;
+          # the strip is always the tail, and checksum sections use '### '
+          # headers so they never match), then neutralise inline @thanks so
+          # GitHub renders no duplicate native contributors widget.
+          BODY=$(gh release view "$TAG" --repo "$REPO" --json body --jq .body)
+          BODY=$(printf '%s\n' "$BODY" | sed '/^## Contributors$/,$d' | sed 's/thanks @/thanks /g')
+          {
+            printf '%s' "$BODY"
+            printf '\n## Contributors\n\nRanked by merged pull requests in this release. Thank you all 💜\n\n'
+            while IFS= read -r h; do
+              [ -z "$h" ] && continue
+              printf '<a href="https://github.com/%s" title="@%s"><img src="https://github.com/%s.png?size=64" width="48" alt="@%s"/></a> ' "$h" "$h" "$h" "$h"
+            done <<< "$RANKED"
+            printf '\n'
+          } > /tmp/stable-notes.md
+          gh release edit "$TAG" --repo "$REPO" --notes-file /tmp/stable-notes.md
+          echo "Appended ranked Contributors strip ($(printf '%s' "$RANKED" | tr '\n' ' ')) to $TAG."
+
   # ── Auto-generated preview release notes ──────────────────────────────────
   # tauri-action publishes the rolling `preview` release with the plain
   # changelog-fallback body ("Auto-generated release for main…"). Replace it
