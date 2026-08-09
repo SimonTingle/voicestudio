@@ -270,6 +270,8 @@ jobs:
         include:
           - os: macos-14
             label: macOS
+          - os: macos-15-intel
+            label: macOS Intel
           - os: windows-2022
             label: Windows
           - os: ubuntu-22.04
@@ -352,8 +354,11 @@ jobs:
           packages: ffmpeg libsndfile1
           version: 1.0
 
-      - name: Install Python deps
-        run: uv sync
+      - name: Install Python deps (including PocketTTS)
+        # PocketTTS is an opt-in engine, but installing its pinned extra here
+        # proves that the same dependency set resolves on every release host:
+        # Apple Silicon, Intel macOS, Windows x64, and Linux x64.
+        run: uv sync --extra pockettts
 
       - name: Run smoke tests
         run: uv run pytest tests/smoke/ -q --tb=short
