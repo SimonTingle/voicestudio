@@ -758,6 +758,10 @@ jobs:
             || fail "custom AppRun missing from final AppImage"
           [ -s "$ROOT/usr/lib/.bundled-webkitgtk-version" ] \
             || fail "bundled WebKitGTK version marker missing"
+          cmp -s \
+            "$ROOT/usr/lib/.bundled-webkitgtk-version" \
+            "$GITHUB_WORKSPACE/frontend/src-tauri/target/.tauri/bundled-webkitgtk-version" \
+            || fail "bundled WebKitGTK version marker is stale or mismatched"
           # Thin uv-venv installer: verify the AppImage carries the shell binary,
           # the bundled uv sidecar, and the backend source resources.
           { [ -f "$ROOT/AppRun" ] || find "$ROOT" -type f \( -name "VoiceStudio" -o -name "omnivoice-studio" \) | grep -q .; } || fail "shell binary / AppRun missing"
