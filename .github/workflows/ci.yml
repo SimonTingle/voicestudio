@@ -51,7 +51,7 @@ jobs:
 
       # apt install ffmpeg is ~30 s every run; cache the resolved .debs.
       - name: System deps (ffmpeg)
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
           packages: ffmpeg
           version: 1.0
@@ -355,7 +355,7 @@ jobs:
 
       - name: System deps (Linux)
         if: runner.os == 'Linux' && matrix.backend_supported
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
           packages: ffmpeg libsndfile1
           version: 1.0
@@ -394,3 +394,4 @@ jobs:
         run: uv run pytest tests/smoke/ -q --tb=short
         env:
           HF_HUB_OFFLINE: "1"  # same no-silent-downloads guard as the main pytest job
+          HF_HUB_CACHE: ${{ runner.temp }}/pockettts-empty-hf-cache
