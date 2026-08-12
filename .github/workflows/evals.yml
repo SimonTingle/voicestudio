@@ -38,14 +38,14 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install deps
-        run: uv sync
+        run: bash scripts/uv-sync-retry.sh
 
       - name: Run eval suites (non-gating)
         continue-on-error: true
         env:
           TRANSLATE_BASE_URL: ${{ secrets.EVALS_LLM_BASE_URL }}
           TRANSLATE_API_KEY: ${{ secrets.EVALS_LLM_API_KEY }}
-        run: uv run python tests/evals/run_evals.py --output eval-report.json
+        run: uv run --no-sync python tests/evals/run_evals.py --output eval-report.json
 
       - name: Upload report artifact
         uses: actions/upload-artifact@v4
