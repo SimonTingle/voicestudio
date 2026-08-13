@@ -51,6 +51,19 @@ on:
 permissions:
   contents: write    # needed to attach artifacts + updater manifest to GH Release
 
+# Every preview build publishes to the SAME rolling `preview` release, and the
+# updater manifest is rebuilt from whatever assets are on it. Two overlapping
+# preview runs (the nightly schedule and a manual dispatch, say) would upload
+# into each other's asset set, and the version-less macOS tarballs carry
+# nothing saying which run produced them — so one run could publish a manifest
+# advertising its own version while serving the other run's macOS binaries
+# (greptile). Serialize instead. Keyed on the ref, so a `v*` tag push (which
+# builds its own release and never touches `preview`) is never queued behind a
+# nightly.
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   # Run all JavaScript actions on Node 24 (GH deprecates Node 20 in Sep 2026).
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -90,16 +103,16 @@ jobs:
       # Backend tests need ffmpeg (subprocess calls in fixtures). Cache the
       # resolved .debs so warm runs skip the apt-get update + install.
       - name: System deps (ffmpeg)
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
           packages: ffmpeg
           version: 1.0
 
       - name: Install Python deps
-        run: uv sync
+        run: bash scripts/uv-sync-retry.sh
 
       - name: Run pytest
-        run: uv run pytest tests/ -q --tb=short
+        run: uv run --no-sync pytest tests/ -q --tb=short
 
       - name: Cache bun deps
         uses: actions/cache@v4
@@ -518,8 +531,8 @@ jobs:
       # The rolling `preview` release is REUSED every night, and macOS updater
       # artifacts are the only ones Tauri names WITHOUT the version:
       #
-      #   OmniVoice Studio_0.4.1-103_x64.dmg     <- unique per run, uploads fine
-      #   OmniVoice Studio_x64.app.tar.gz        <- constant, collides
+      #   VoiceStudio_0.4.1-103_x64.dmg     <- unique per run, uploads fine
+      #   VoiceStudio_x64.app.tar.gz        <- constant, collides
       #
       # So every preview build after the first failed the macOS legs with
       # `Validation Failed: {"resource":"ReleaseAsset","code":"already_exists"}`
@@ -553,10 +566,12 @@ jobs:
             x86_64-*)  SUFFIX=x64 ;;
             *) echo "::error::unexpected arch ${{ matrix.arch }}"; exit 1 ;;
           esac
-          # Match the STORED name, not the uploaded one: GitHub rewrites spaces
-          # to dots, so "OmniVoice Studio_x64.app.tar.gz" is stored as
-          # "OmniVoice.Studio_x64.app.tar.gz". Query the release and filter,
-          # rather than guessing which spelling to pass.
+          # Match the STORED name, not the uploaded one. GitHub rewrites
+          # spaces to dots, which is why the pre-rename product ("OmniVoice
+          # Studio") was stored as "OmniVoice.Studio_x64.app.tar.gz".
+          # "VoiceStudio" has no space and so needs no translation — the
+          # pattern below matches both, so a preview release still holding
+          # pre-rename assets is still cleaned up.
           if ! gh release view preview --json assets -q '.assets[].name' \
                  > /tmp/preview-assets.txt 2> /tmp/gh-view-err.txt; then
             if grep -qiE 'not found|HTTP 404' /tmp/gh-view-err.txt; then
@@ -568,7 +583,7 @@ jobs:
             cat /tmp/gh-view-err.txt
             exit 1
           fi
-          grep -E "[ .]Studio_${SUFFIX}\.app\.tar\.gz(\.sig)?$" /tmp/preview-assets.txt \
+          grep -E "(^VoiceStudio|[ .]Studio)_${SUFFIX}\.app\.tar\.gz(\.sig)?$" /tmp/preview-assets.txt \
             > /tmp/stale.txt || true
           if [ ! -s /tmp/stale.txt ]; then
             echo "No stale ${SUFFIX} updater bundle on preview — nothing to clear."
@@ -627,7 +642,7 @@ jobs:
           tagName: ${{ (needs.preview-gate.outputs.is_preview == 'true') && 'preview' || github.ref_name }}
           # Version-first so the tag is readable in GitHub's truncated
           # release-list sidebar (which clips the title mid-string).
-          releaseName: ${{ (needs.preview-gate.outputs.is_preview == 'true') && 'Preview — OmniVoice Studio' || format('{0} — OmniVoice Studio', github.ref_name) }}
+          releaseName: ${{ (needs.preview-gate.outputs.is_preview == 'true') && 'Preview — VoiceStudio' || format('{0} — VoiceStudio', github.ref_name) }}
           releaseBody: ${{ steps.changelog.outputs.body }}
           releaseDraft: ${{ (needs.preview-gate.outputs.is_preview == 'true') && 'false' || (inputs.draft || 'true') }}
           prerelease: ${{ needs.preview-gate.outputs.is_preview == 'true' }}
@@ -650,8 +665,10 @@ jobs:
           set -euo pipefail
           DMG=$(find frontend/src-tauri/target/${{ matrix.rust_target }}/release/bundle/dmg -name "*.dmg" | head -1)
           echo "Smoke-testing DMG: $DMG"
-          # Grab the full mount path — the volume name has a space ("OmniVoice
-          # Studio"), so `awk '{print $3}'` would truncate it to /Volumes/OmniVoice.
+          # Grab the full mount path with a grep rather than `awk '{print $3}'`.
+          # The volume name used to contain a space ("OmniVoice Studio"), which
+          # awk truncated to /Volumes/OmniVoice; "VoiceStudio" has no space, so
+          # this is now belt-and-braces rather than load-bearing.
           MOUNT=$(hdiutil attach -nobrowse -readonly "$DMG" | tail -1 | grep -oE '/Volumes/.*$')
           APP=$(find "$MOUNT" -maxdepth 2 -name "*.app" | head -1)
           fail() { echo "FAIL — $1"; find "$APP/Contents" -maxdepth 4 -type f 2>/dev/null | head -40; hdiutil detach "$MOUNT" || true; exit 1; }
@@ -704,7 +721,7 @@ jobs:
           echo "Smoke-testing MSI: $MSI"
           # /quiet = no UI, /norestart = don't reboot the runner if a dep asks
           msiexec.exe //i "$(cygpath -w "$MSI")" //quiet //norestart
-          INSTALL="/c/Program Files/OmniVoice Studio"
+          INSTALL="/c/Program Files/VoiceStudio"
           fail() { echo "FAIL — $1. Contents:"; find "$INSTALL" -maxdepth 4 -type f 2>/dev/null | head -40; exit 1; }
           # Thin uv-venv installer ships no frozen backend .exe — verify the
           # install is complete: shell exe + bundled uv + backend source resources.
@@ -734,9 +751,16 @@ jobs:
           "$APPIMAGE" --appimage-extract >/dev/null
           ROOT="$EXTRACT_DIR/squashfs-root"
           fail() { echo "FAIL — $1"; find "$ROOT" -maxdepth 5 -type f 2>/dev/null | head -40; exit 1; }
+          # linuxdeploy's GTK/GStreamer hooks wrap the seeded launcher as
+          # AppRun.wrapped. Verify the complete launcher chain, not only the
+          # small hook runner installed at the AppImage root.
+          bash "$GITHUB_WORKSPACE/scripts/verify-apprun-bundle.sh" \
+            "$ROOT" \
+            "$GITHUB_WORKSPACE/frontend/src-tauri/appimage/AppRun" \
+            "$GITHUB_WORKSPACE/frontend/src-tauri/target/.tauri/bundled-webkitgtk-version"
           # Thin uv-venv installer: verify the AppImage carries the shell binary,
           # the bundled uv sidecar, and the backend source resources.
-          { [ -f "$ROOT/AppRun" ] || find "$ROOT" -type f \( -name "OmniVoice Studio" -o -name "omnivoice-studio" \) | grep -q .; } || fail "shell binary / AppRun missing"
+          { [ -f "$ROOT/AppRun" ] || find "$ROOT" -type f \( -name "VoiceStudio" -o -name "omnivoice-studio" \) | grep -q .; } || fail "shell binary / AppRun missing"
           find "$ROOT" -type f -name 'uv' | grep -q . || fail "bundled uv sidecar missing"
           find "$ROOT" -type f -name 'pyproject.toml' | grep -q . || fail "backend resource pyproject.toml missing"
           find "$ROOT" -type f -path '*/backend/main.py' | grep -q . || fail "backend source backend/main.py missing"
@@ -918,7 +942,162 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      # The manifest rebuild reads this run's `created_at` from the Actions
+      # Runs API to tie the version-less macOS bundles to this build. Without
+      # this scope the call 403s and, under `set -e`, takes the whole publish
+      # down (greptile).
+      actions: read
     steps:
+      # Needed by the manifest rebuild + signature check below: the updater
+      # pubkey lives in frontend/src-tauri/tauri.conf.json.
+      #
+      # persist-credentials: false — nothing in this job pushes to git, and the
+      # steps that follow shell out to `gh` and install from PyPI, so leaving a
+      # token in .git/config only widens the blast radius (CodeRabbit).
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # ── Rebuild the preview updater manifest from what is ACTUALLY published ──
+      # Since ~2026-07-13 every matrix leg has logged "Signature not found for
+      # the updater JSON. Skipping upload..." — tauri-action uploads the bundles
+      # + .sig companions but never refreshes latest.json. Meanwhile the macOS
+      # updater bundles (version-less filenames) are deleted + replaced every
+      # night by "Clear this arch's stale preview updater bundle", so the
+      # manifest's darwin signatures stopped matching the published files:
+      # macOS Preview users hit "The signature verification failed" on every
+      # update attempt (latest.json frozen at 2026-07-13, tar.gz replaced
+      # nightly).
+      #
+      # Root fix: after the matrix completes, rebuild latest.json HERE — one
+      # job, no per-leg race — from the release's real assets and their .sig
+      # companions, then clobber-upload. The manifest can no longer drift from
+      # the files it describes, regardless of what tauri-action's own
+      # updater-JSON path does or skips.
+      - name: Rebuild + verify the preview updater manifest, then publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Floor-pinned, matching docs-drift.yml's `pyyaml>=6`: this step
+          # decides whether a signed release manifest is trustworthy, so it is
+          # the one dependency worth a bound. Only Ed25519 verify is used.
+          pip install --quiet "cryptography>=42"
+
+          # name + updatedAt: the timestamp is how the version-less darwin
+          # tarballs get tied to this run — see scripts/build_preview_manifest.py.
+          gh release view preview --repo "$REPO" --json assets \
+            -q '[.assets[] | {name, updatedAt}]' > /tmp/assets.json
+
+          # The anchor for "this upload belongs to this run" is the moment this
+          # run's FIRST JOB began executing. Two wrong answers were considered:
+          #
+          #   * `run_started_at` RESETS on re-run — re-running just this job
+          #     would judge the macOS bundles its own earlier attempt uploaded
+          #     as stale, and refuse a healthy build.
+          #   * the run's `created_at` is stamped when the run is QUEUED. With
+          #     the concurrency group above, a run can sit queued while the
+          #     previous one uploads — so the queued run's created_at predates
+          #     the OTHER run's macOS bundles and would accept them as its own
+          #     (coderabbit).
+          #
+          # The earliest job start is after the queue wait (concurrency holds
+          # the whole run, so no job of ours has started) and before any of our
+          # own uploads. Jobs that were not re-run keep their original
+          # timestamps, so taking the MINIMUM stays correct across partial
+          # re-runs too.
+          #
+          # Needs the job's `actions: read` scope. If it ever 403s anyway, do
+          # not take the whole publish down with `set -e`: warn loudly and let
+          # build_manifest fall back to its leg-to-leg comparison, which is
+          # merely stricter than it should be, never laxer.
+          if ! RUN_CREATED_AT=$(gh api --paginate \
+                 "repos/$REPO/actions/runs/${{ github.run_id }}/jobs?filter=latest" \
+                 --jq '[.jobs[].started_at] | map(select(. != null)) | min // empty' \
+                 2> /tmp/gh-run-err.txt); then
+            echo "::warning::Could not read this run's job start times (needs actions: read) — falling back to the stricter sibling-timestamp check, which can refuse a healthy build."
+            cat /tmp/gh-run-err.txt
+            RUN_CREATED_AT=""
+          fi
+          echo "This run began executing at ${RUN_CREATED_AT:-<unknown>}"
+          export RUN_CREATED_AT
+
+          WORK=$(mktemp -d)
+          python3 - "$WORK" <<'PY'
+          import base64, hashlib, json, os, subprocess, sys
+          from urllib.parse import unquote
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+          sys.path.insert(0, "scripts")
+          from build_preview_manifest import ManifestRefused, build_manifest, required_assets
+
+          work, repo = sys.argv[1], os.environ["REPO"]
+          assets = json.load(open("/tmp/assets.json"))
+
+          def fetch(pattern):
+              subprocess.run(["gh", "release", "download", "preview", "--repo", repo,
+                              "-p", pattern, "-D", work], check=True)
+
+          signatures = {}
+          for name in required_assets(assets):
+              fetch(name + ".sig")
+              signatures[name] = open(os.path.join(work, name + ".sig")).read()
+
+          try:
+              manifest = build_manifest(
+                  assets, repo, signatures=signatures,
+                  run_started_at=os.environ.get("RUN_CREATED_AT") or None,
+              )
+          except ManifestRefused as e:
+              sys.exit(f"Refusing to publish a preview manifest: {e}")
+          print(f"Built preview latest.json: version={manifest['version']}")
+
+          # ── Verify BEFORE publishing ──────────────────────────────────────
+          # Order is the whole point (greptile). Uploading first and checking
+          # afterwards leaves a manifest that fails the check live and served:
+          # the job goes red, and every macOS Preview user is broken until
+          # someone notices. Verify the file we are about to publish.
+          conf = json.load(open("frontend/src-tauri/tauri.conf.json"))
+          pub_doc = base64.b64decode(conf["plugins"]["updater"]["pubkey"]).decode()
+          pub = base64.b64decode(pub_doc.strip().splitlines()[1])
+          assert pub[:2] == b"Ed", "unexpected pubkey algorithm"
+          pk = Ed25519PublicKey.from_public_bytes(pub[10:42])
+
+          digests, failures = {}, []
+          for plat, info in sorted(manifest["platforms"].items()):
+              name = unquote(info["url"].rsplit("/", 1)[-1])
+              path = os.path.join(work, name)
+              if name not in digests:
+                  fetch(name)
+                  h = hashlib.blake2b(digest_size=64)
+                  with open(path, "rb") as f:
+                      for chunk in iter(lambda: f.read(1 << 20), b""):
+                          h.update(chunk)
+                  digests[name] = h.digest()
+              lines = base64.b64decode(info["signature"]).decode().splitlines()
+              sig = base64.b64decode(lines[1])
+              tc = lines[2].split("trusted comment: ", 1)[1]
+              gsig = base64.b64decode(lines[3])
+              try:
+                  pk.verify(sig[10:74], digests[name])
+                  pk.verify(gsig, sig[10:74] + tc.encode())
+                  print(f"OK   {plat}: signature matches {name}")
+              except Exception:
+                  failures.append(plat)
+                  print(f"FAIL {plat}: signature does NOT match {name}")
+          if failures:
+              sys.exit("Refusing to publish: manifest is broken for "
+                       + ", ".join(failures)
+                       + ". The previously published manifest is left in place.")
+
+          json.dump(manifest, open(os.path.join(work, "latest.json"), "w"), indent=2)
+          print("All signatures verified — safe to publish.")
+          PY
+
+          gh release upload preview "$WORK/latest.json" --clobber --repo "$REPO"
+          echo "Uploaded verified latest.json to the preview release."
+
       - name: Generate + apply GitHub release notes to the preview release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -952,7 +1131,7 @@ jobs:
           gh release edit preview --repo "$REPO" --prerelease --notes-file /tmp/preview-notes.md
           echo "Applied auto-generated release notes + contributors to the preview release."
 
-      - name: Verify preview updater manifest (prerelease + platform parity)
+      - name: Verify the published preview manifest (prerelease + parity + served bytes)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -977,6 +1156,24 @@ jobs:
           assert not missing, f"preview manifest missing platforms vs stable: {sorted(missing)}"
           print(f"preview manifest OK: {v} platforms={sorted(pk)}")
           PY
+          # The signatures were verified BEFORE publishing (see the rebuild
+          # step). What is worth checking here is different: that the file
+          # actually being SERVED is the one that passed. A CDN or a partial
+          # upload can leave something else at that URL, and the whole class of
+          # bug this job addresses is "the manifest does not describe what is
+          # published".
+          python3 - <<'PY'
+          import hashlib, json, sys
+          served = open("/tmp/preview-latest.json", "rb").read()
+          m = json.loads(served)
+          plats = sorted(m.get("platforms", {}))
+          print(f"served manifest: version={m.get('version')} platforms={plats}")
+          print(f"served sha256={hashlib.sha256(served).hexdigest()}")
+          missing = [p for p in plats if not m["platforms"][p].get("signature")]
+          if missing:
+              sys.exit(f"served manifest has empty signatures for: {missing}")
+          PY
+
 
   # ── Post-release version bump (OWNER-GATED as of 2026-07-01) ──────────────
   # Previously auto-ran after every stable v* tag to keep main = release + 1.
