@@ -377,6 +377,7 @@ from services import network_share
 
 from api.dependencies import (  # loopback + OMNIVOICE_TRUSTED_NETWORKS
     is_local_host,
+    presented_api_key,
     remote_api_key,
 )
 
@@ -1215,12 +1216,7 @@ class BearerKeyMiddleware:
         from starlette.requests import HTTPConnection
 
         conn = HTTPConnection(scope)
-        auth = conn.headers.get("authorization", "")
-        supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        if not supplied:
-            supplied = (
-                conn.query_params.get("api_key") or conn.cookies.get("ov_key") or ""
-            ).strip()
+        supplied = presented_api_key(conn)
 
         if not secrets.compare_digest(supplied, key):
             if scope["type"] == "websocket":

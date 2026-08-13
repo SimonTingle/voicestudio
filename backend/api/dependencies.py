@@ -107,6 +107,27 @@ def remote_api_key() -> str | None:
     return os.environ.get("OMNIVOICE_API_KEY", "").strip() or None
 
 
+def presented_api_key(connection) -> str:
+    """Return the first non-empty normalized API key on an HTTP/WS connection.
+
+    Authorization wins over query, which wins over cookie. Each channel is
+    stripped before fallback so whitespace in a higher-priority channel cannot
+    shadow a valid lower-priority credential.
+    """
+    headers = getattr(connection, "headers", None) or {}
+    query = getattr(connection, "query_params", None) or {}
+    cookies = getattr(connection, "cookies", None) or {}
+
+    auth = headers.get("authorization", "")
+    supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if supplied:
+        return supplied
+    supplied = (query.get("api_key") or "").strip()
+    if supplied:
+        return supplied
+    return (cookies.get("ov_key") or "").strip()
+
+
 def _configured_pin(request) -> str | None:
     """The active share PIN (``app.state.network_share.pin``) or None. Read via
     getattr so a bare Request stub (or a request that hit before lifespan set
@@ -146,14 +167,7 @@ def _request_presents_admin_credential(request) -> bool:
     api_key = remote_api_key() or ""
     if not api_key:
         return False
-    headers = getattr(request, "headers", None) or {}
-    query = getattr(request, "query_params", None) or {}
-    cookies = getattr(request, "cookies", None) or {}
-
-    auth = headers.get("authorization", "")
-    supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    if not supplied:
-        supplied = (query.get("api_key") or cookies.get("ov_key") or "").strip()
+    supplied = presented_api_key(request)
     return bool(supplied and secrets.compare_digest(supplied, api_key))
 
 
@@ -303,12 +317,4 @@ def ws_remote_authorized(websocket) -> bool:
     key = remote_api_key()
     if not key:
         return False
-    auth = websocket.headers.get("authorization", "")
-    supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    if not supplied:
-        supplied = (
-            websocket.query_params.get("api_key")
-            or websocket.cookies.get("ov_key")
-            or ""
-        ).strip()
-    return secrets.compare_digest(supplied, key)
+    return secrets.compare_digest(presented_api_key(websocket), key)
