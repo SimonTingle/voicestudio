@@ -108,6 +108,7 @@ import { clearDubHistory as apiClearDubHistory } from './api/dub';
 import { isTauri, doubleClickMaximize, fileToMediaUrl, playBlobAudio } from './utils/media';
 import { browserDownload } from './utils/download';
 import { downloadMedia } from './utils/mediaDownload';
+import { installDesktopInteractionGuards } from './utils/desktopInteractions';
 import { checkForUpdate, fetchAppVersion } from './utils/updater';
 import { syncChannel } from './utils/channelControl';
 import i18n from './i18n';
@@ -746,58 +747,19 @@ function App() {
   // ── DESKTOP NATIVE INTEGRATION ──
   useEffect(() => {
     if (typeof window === 'undefined') return;
-
-    // 1. Prevent default right-click to hide web nature
-    const handleContextMenu = (e) => {
-      // allow on inputs/textareas for copy/paste
-      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
-      e.preventDefault();
-    };
-
-    // 2. Prevent keyboard quicks (reload, zoom, print)
-    const handleKeyDown = (e) => {
-      if (!e.metaKey && !e.ctrlKey) return;
-      if (['r', 'p', '=', '-', '+'].includes(e.key.toLowerCase())) {
-        e.preventDefault();
-      }
-    };
-
-    // 3. Prevent pinch-to-zoom
-    const handleWheel = (e) => {
-      if (e.ctrlKey) e.preventDefault();
-    };
-
-    // 4. Global Drag and drop for seamless native feeling
-    const handleDrop = (e) => {
-      e.preventDefault();
-      const file = e.dataTransfer?.files[0];
-      if (!file) return;
-
-      const isVideo = file.name.match(/\.(mp4|mov|mkv|webm|avi)$/i);
-      const isAudio = file.name.match(/\.(mp3|wav|flac|m4a|ogg)$/i);
-      if (isVideo || isAudio) {
-        setMode('dub');
-        setDubVideoFile(file);
-        fileToMediaUrl(file, null).then((urls) => setDubLocalBlobUrl(urls));
-        setDubFilename(file.name);
-        setDubStep('idle');
-      }
-    };
-    const handleDragOver = (e) => e.preventDefault();
-
-    window.addEventListener('contextmenu', handleContextMenu);
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('wheel', handleWheel, { passive: false });
-    window.addEventListener('drop', handleDrop);
-    window.addEventListener('dragover', handleDragOver);
-
-    return () => {
-      window.removeEventListener('contextmenu', handleContextMenu);
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('wheel', handleWheel);
-      window.removeEventListener('drop', handleDrop);
-      window.removeEventListener('dragover', handleDragOver);
-    };
+    return installDesktopInteractionGuards({
+      onDrop: (file) => {
+        const isVideo = file.name.match(/\.(mp4|mov|mkv|webm|avi)$/i);
+        const isAudio = file.name.match(/\.(mp3|wav|flac|m4a|ogg)$/i);
+        if (isVideo || isAudio) {
+          setMode('dub');
+          setDubVideoFile(file);
+          fileToMediaUrl(file, null).then((urls) => setDubLocalBlobUrl(urls));
+          setDubFilename(file.name);
+          setDubStep('idle');
+        }
+      },
+    });
   }, []);
 
   // ── KEYBOARD SHORTCUTS ──

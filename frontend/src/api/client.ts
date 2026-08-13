@@ -36,7 +36,16 @@ export const LS_API_KEY = 'ov_api_key';
 // Pure + exported for unit testing — takes env + window so tests don't need to
 // re-import the module or stub import.meta.env.
 export function _resolveApiBase(env: any, win: any): string {
-  const port = env?.VITE_API_PORT || '3900';
+  const defaultPort = '3900';
+  // A port override is useful for a deliberately moved backend, but pointing
+  // it at Vite itself can only return the SPA's 404 page. This commonly
+  // happens when a developer moves the UI to :3000 and copies that value into
+  // both variables. Preserve explicit API URLs (which may name a real proxy),
+  // while making the port-only configuration recover to the local backend.
+  const requestedPort = String(env?.VITE_API_PORT || defaultPort);
+  const port = env?.DEV && requestedPort === String(win?.location?.port || '')
+    ? defaultPort
+    : requestedPort;
   // Explicit override, in precedence order:
   //   1. localStorage ov_backend_url — the user's explicit "Remote backend"
   //      setting (Wave 2.3). Beats everything: it's the one override a
