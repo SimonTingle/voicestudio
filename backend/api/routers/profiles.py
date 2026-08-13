@@ -14,6 +14,7 @@ from core import event_bus
 from core.personalities import get_personalities
 from omnivoice.utils.voice_design import heal_design_instruct, sanitize_instruct
 from core.path_security import UnsafePath, resolve_within
+from services.hosted_voice_api import HostedSettings, HostedVoiceClient, HostedVoiceError
 
 router = APIRouter()
 
@@ -182,6 +183,50 @@ def get_profile(profile_id: str):
             detail="That voice profile doesn't exist. It may have been deleted from another tab.",
         )
     return dict(row)
+
+
+@router.post("/profiles/{profile_id}/hosted-sync")
+async def sync_profile_to_hosted(profile_id: str):
+    """Explicitly copy a consent-verified local clone to the hosted library.
+
+    This is deliberately not part of local profile creation: merely creating a
+    profile must never upload biometric source audio. The hosted service records
+    the existing spoken-consent evidence as its versioned attestation; it does
+    not receive the consent recording itself.
+    """
+    try:
+        settings = HostedSettings.from_environment()
+    except HostedVoiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if settings is None:
+        raise HTTPException(status_code=409, detail="Hosted voice sync is not configured on this device.")
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT id, name, description, ref_text, ref_audio_path, verified_own_voice, consent_text, hosted_voice_id "
+            "FROM voice_profiles WHERE id=?", (profile_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if row["hosted_voice_id"]:
+        return {"profile_id": profile_id, "hosted_voice_id": row["hosted_voice_id"], "state": "already_synced"}
+    if not row["verified_own_voice"] or not row["consent_text"].strip():
+        raise HTTPException(status_code=422, detail="Record the voice-ownership consent statement before hosted sync.")
+    reference_path = _voices_path(row["ref_audio_path"] or "")
+    if not reference_path or not os.path.isfile(reference_path):
+        raise HTTPException(status_code=422, detail="This profile has no local reference recording to sync.")
+    client = HostedVoiceClient(settings)
+    try:
+        hosted_voice_id = await client.create_voice(
+            name=row["name"], description=row["description"] or row["ref_text"] or "", reference_path=reference_path,
+        )
+    except HostedVoiceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        await client.aclose()
+    with db_conn() as conn:
+        conn.execute("UPDATE voice_profiles SET hosted_voice_id=? WHERE id=? AND hosted_voice_id=''", (hosted_voice_id, profile_id))
+        persisted = conn.execute("SELECT hosted_voice_id FROM voice_profiles WHERE id=?", (profile_id,)).fetchone()["hosted_voice_id"]
+    return {"profile_id": profile_id, "hosted_voice_id": persisted, "state": "synced"}
 
 
 @router.put("/profiles/{profile_id}")

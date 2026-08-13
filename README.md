@@ -100,6 +100,7 @@ Three flagships, five more headliners, and a dozen under the fold.
 - 🎒 **Portable personas** — export voices as `.ovsvoice` bundles: identity + watermark.
 - ♾️ **Unlimited TTS** — sentence-chunked generation, no length cap, streaming via WebSocket.
 - 🌐 **Remote backend** — point the UI at a remote server; Tailscale-friendly, bearer auth.
+- ☁️ **Hosted Voice opt-in** — consent-backed profile sync and durable hosted Jobs; local synthesis remains the default. See [Hosted Voice](docs/hosted-voice.md).
 - 🧠 **Dictation + LLM** — local-LLM cleanup of transcripts, optional echo cancellation.
 
 </details>
