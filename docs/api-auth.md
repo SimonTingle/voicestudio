@@ -196,10 +196,11 @@ time, so in production **restart the backend** to apply a change. Default empty
 ## Admin routes and server mode
 
 Admin routes — `/system/*` (including `set-env`, **RCE-class**),
-`/api/settings/*`, engine install/uninstall, media tools, MCP bindings — sit on
-a stricter gate (`require_admin`, `backend/api/dependencies.py`) than
-consumption. On the desktop build they are **true-loopback-only**: no PIN, key,
-or trusted network reaches them from another machine.
+`/api/settings/*`, engine selection/install/uninstall, media tools, MCP
+bindings, pronunciation settings, and remote-worker management — sit on a
+stricter gate (`require_admin`, `backend/api/dependencies.py`) than consumption.
+On the desktop build they are **true-loopback-only**: no PIN, key, or trusted
+network reaches them from another machine.
 
 In **server mode** (`OMNIVOICE_SERVER_MODE=1`, the Docker image) the loopback
 origin is unenforceable — NAT rewrites the source and even a
@@ -209,8 +210,11 @@ requirement is dropped (issue #261, else the operator is 403'd out of their own
 
 - **No API key configured** → read-only admin discovery remains available for
   the bare Docker bootstrap flow, but `POST`/`PUT`/`PATCH`/`DELETE` requests are
-  denied. Set `OMNIVOICE_API_KEY` before changing settings remotely.
-- **A credential is configured** → admin requires the **API key** (`Authorization:
+  denied. Side-effectful GET actions are denied too: engine health may start a
+  sidecar, deep diagnostics may load a model, and LLM provider discovery makes
+  a request with the saved provider credential. Set `OMNIVOICE_API_KEY` before
+  changing settings or triggering those actions remotely.
+- **An API key is configured** → admin requires that **API key** (`Authorization:
   Bearer` / `?api_key` / `ov_key` cookie), or genuine loopback. The **6-digit
   share PIN does not gate admin** (it is brute-forceable), and trusted-network
   membership never does either. A **PIN-only** server-mode deployment therefore
