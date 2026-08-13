@@ -100,6 +100,13 @@ def _server_mode() -> bool:
     return os.environ.get("OMNIVOICE_SERVER_MODE", "").strip().lower() in _TRUTHY
 
 
+def remote_api_key() -> str | None:
+    """The normalized remote-backend bearer key, or None when remote mode is
+    off. Surrounding whitespace is configuration noise, never a valid secret.
+    Read at call time so tests can monkeypatch the environment."""
+    return os.environ.get("OMNIVOICE_API_KEY", "").strip() or None
+
+
 def _configured_pin(request) -> str | None:
     """The active share PIN (``app.state.network_share.pin``) or None. Read via
     getattr so a bare Request stub (or a request that hit before lifespan set
@@ -117,7 +124,7 @@ def _admin_credential_configured(request) -> bool:
     opted out of bare-server discovery. Remote admin then remains closed until
     they configure and present the long API key.
     """
-    if os.environ.get("OMNIVOICE_API_KEY", "").strip():
+    if remote_api_key():
         return True
     return bool(_configured_pin(request))
 
@@ -136,7 +143,7 @@ def _request_presents_admin_credential(request) -> bool:
     admin. Net: remote admin in server mode requires the API key; a PIN-only
     deployment keeps admin loopback-only. getattr-defensive so a minimal Request
     stub never raises."""
-    api_key = os.environ.get("OMNIVOICE_API_KEY") or ""
+    api_key = remote_api_key() or ""
     if not api_key:
         return False
     headers = getattr(request, "headers", None) or {}
@@ -146,7 +153,7 @@ def _request_presents_admin_credential(request) -> bool:
     auth = headers.get("authorization", "")
     supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
     if not supplied:
-        supplied = query.get("api_key") or cookies.get("ov_key") or ""
+        supplied = (query.get("api_key") or cookies.get("ov_key") or "").strip()
     return bool(supplied and secrets.compare_digest(supplied, api_key))
 
 
@@ -285,12 +292,6 @@ def require_native_access(request: Request) -> None:
         raise HTTPException(status_code=403, detail="native filesystem access requires loopback origin")
 
 
-def remote_api_key() -> str | None:
-    """The remote-backend bearer key (Wave 2.3), or None when remote mode is
-    off. Read at call time so tests can monkeypatch the env."""
-    return os.environ.get("OMNIVOICE_API_KEY") or None
-
-
 def ws_remote_authorized(websocket) -> bool:
     """Whether a WebSocket handshake presents the remote API key.
 
@@ -309,5 +310,5 @@ def ws_remote_authorized(websocket) -> bool:
             websocket.query_params.get("api_key")
             or websocket.cookies.get("ov_key")
             or ""
-        )
+        ).strip()
     return secrets.compare_digest(supplied, key)

@@ -375,7 +375,10 @@ from services.model_manager import (
 )
 from services import network_share
 
-from api.dependencies import is_local_host  # loopback + OMNIVOICE_TRUSTED_NETWORKS
+from api.dependencies import (  # loopback + OMNIVOICE_TRUSTED_NETWORKS
+    is_local_host,
+    remote_api_key,
+)
 
 from api.routers import (
     system,
@@ -1197,7 +1200,7 @@ class BearerKeyMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
-        key = os.environ.get("OMNIVOICE_API_KEY") or ""
+        key = remote_api_key() or ""
         if not key:
             return await self.app(scope, receive, send)
         client = scope["client"][0] if scope.get("client") else None
@@ -1215,7 +1218,9 @@ class BearerKeyMiddleware:
         auth = conn.headers.get("authorization", "")
         supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
         if not supplied:
-            supplied = conn.query_params.get("api_key") or conn.cookies.get("ov_key") or ""
+            supplied = (
+                conn.query_params.get("api_key") or conn.cookies.get("ov_key") or ""
+            ).strip()
 
         if not secrets.compare_digest(supplied, key):
             if scope["type"] == "websocket":
