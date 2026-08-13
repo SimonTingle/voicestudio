@@ -36,6 +36,12 @@ def main(argv: list[str] | None = None) -> int:
         default=10.0,
         help="selfcheck RPC timeout in seconds (default: 10)",
     )
+    parser.add_argument(
+        "--no-prewarm",
+        action="store_true",
+        help="serve immediately without loading models first (the first "
+        "execution then pays weight loading and compilation)",
+    )
     args = parser.parse_args(argv)
 
     if args.selfcheck:
@@ -43,10 +49,16 @@ def main(argv: list[str] | None = None) -> int:
 
         return selfcheck(timeout_s=args.timeout)
 
-    from .production import build_runtime_context  # noqa: PLC0415
+    from .production import build_runtime_context, prewarm_engines  # noqa: PLC0415
     from .server import resolve_socket_path, serve  # noqa: PLC0415
 
-    return serve(build_runtime_context(), resolve_socket_path(args.socket))
+    context = build_runtime_context()
+    if not args.no_prewarm:
+        # Deliberately before the socket exists: the Gateway's preflight and
+        # first offer should both find a runtime that can start inference at
+        # once, rather than one that spends an attempt lease compiling.
+        prewarm_engines(context)
+    return serve(context, resolve_socket_path(args.socket))
 
 
 if __name__ == "__main__":
