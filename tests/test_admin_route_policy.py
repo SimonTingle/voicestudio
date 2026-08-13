@@ -115,6 +115,13 @@ def test_sidecar_install_status_uses_method_aware_admin_guard():
     assert "require_admin" in dependencies
 
 
+def test_managed_sidecar_install_stays_desktop_only():
+    dependencies = _dependency_names(
+        _route_decorators(_tree("engines.py"), "install_sidecar_engine")
+    )
+    assert {"require_admin", "require_desktop"} <= dependencies
+
+
 @pytest.mark.parametrize(
     ("filename", "function_name"),
     [

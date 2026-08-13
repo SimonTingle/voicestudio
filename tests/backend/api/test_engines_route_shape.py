@@ -651,6 +651,21 @@ def test_server_mode_engine_health_requires_api_key(fresh_app, monkeypatch):
     assert response.status_code == 403
 
 
+def test_server_mode_sidecar_install_stays_desktop_only(fresh_app, monkeypatch):
+    """An API key cannot remotely trigger the mutable-source installer."""
+    monkeypatch.setenv("OMNIVOICE_SERVER_MODE", "1")
+    monkeypatch.setenv("OMNIVOICE_API_KEY", "s3cret")
+    client = _client(fresh_app, host="172.17.0.1")
+
+    response = client.post(
+        "/engines/sidecar/indextts2/install",
+        headers={"authorization": "Bearer s3cret"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "desktop origin required"
+
+
 def test_engine_health_caches_instance_across_calls(fresh_app, monkeypatch):
     """Two health checks on the same engine reuse the same singleton.
 

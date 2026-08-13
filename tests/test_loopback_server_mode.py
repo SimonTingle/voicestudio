@@ -325,25 +325,27 @@ def test_server_mode_admin_rejects_wrong_api_key(monkeypatch):
     assert exc.value.status_code == 403
 
 
-def test_server_mode_pin_only_keeps_read_discovery_but_cannot_unlock_mutations(
-    monkeypatch,
-):
+def test_server_mode_pin_only_keeps_admin_loopback_only(monkeypatch):
     # CodeRabbit #1213: the 6-digit share PIN is a CONSUMPTION credential and is
     # brute-forceable (10^6, no lockout), so it must NEVER gate the RCE-class
-    # admin surface. With a PIN set but no API key, read-only discovery remains
-    # available for bootstrap, but presenting the PIN cannot authorize a write.
+    # admin surface. Once a PIN is configured, bare read-only discovery closes;
+    # presenting that PIN still cannot authorize either a read or a write.
     monkeypatch.setenv("OMNIVOICE_SERVER_MODE", "1")
     monkeypatch.setenv("OMNIVOICE_TRUSTED_NETWORKS", "10.0.0.0/8")
     monkeypatch.delenv("OMNIVOICE_API_KEY", raising=False)
-    # Discovery remains available regardless of whether the PIN is presented.
-    require_loopback(_req_full("10.1.2.3", pin="1234"))
-    require_loopback(
-        _req_full("10.1.2.3", pin="1234", headers={"x-omnivoice-pin": "1234"})
-    )
-    # No PIN presented → mutation denied.
+    # No PIN presented → discovery denied.
     with pytest.raises(HTTPException):
-        require_loopback(_req_full("10.1.2.3", pin="1234", method="POST"))
+        require_loopback(_req_full("10.1.2.3", pin="1234"))
     # Correct PIN presented → STILL denied (the PIN never gates admin).
+    with pytest.raises(HTTPException):
+        require_loopback(
+            _req_full(
+                "10.1.2.3",
+                pin="1234",
+                headers={"x-omnivoice-pin": "1234"},
+            )
+        )
+    # Mutations are denied for the same reason.
     with pytest.raises(HTTPException):
         require_loopback(
             _req_full(
@@ -387,10 +389,12 @@ def test_server_mode_admin_read_keeps_bare_docker_bootstrap(monkeypatch):
     require_admin(_req_full("172.17.0.1", method="GET"))
 
 
-def test_server_mode_admin_read_keeps_pin_only_discovery(monkeypatch):
+def test_server_mode_admin_read_rejects_pin_only_deployment(monkeypatch):
     monkeypatch.setenv("OMNIVOICE_SERVER_MODE", "1")
     monkeypatch.delenv("OMNIVOICE_API_KEY", raising=False)
-    require_admin(_req_full("172.17.0.1", method="GET", pin="123456"))
+    with pytest.raises(HTTPException) as exc:
+        require_admin(_req_full("172.17.0.1", method="GET", pin="123456"))
+    assert exc.value.status_code == 403
 
 
 def test_server_mode_admin_mutation_allows_api_key(monkeypatch):

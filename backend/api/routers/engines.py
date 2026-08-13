@@ -25,7 +25,7 @@ from huggingface_hub import utils as hf_utils
 from huggingface_hub.errors import HFValidationError
 from pydantic import BaseModel
 
-from api.dependencies import require_admin, require_admin_action
+from api.dependencies import require_admin, require_admin_action, require_desktop
 from core import prefs
 from services import tts_backend, asr_backend, llm_backend, translation_engines
 from services.audio_dsp import list_effect_presets
@@ -194,16 +194,16 @@ async def uninstall_translation_engine(engine_id: str):
 # POST /engines/sonitranslate/install). Mirrors the
 # /engines/translation/{engine_id}/install namespace pattern.
 #
-# Admin-gated: installing spawns subprocesses (git/uv) and writes to the data
-# directory. Desktop stays loopback-only; a remote Docker caller needs the API
-# key. The job runs fine in packaged builds: the venv lives under the user data
-# dir, not inside the signed app bundle, and uv resolves via
+# Desktop-only: installing spawns git/uv against mutable source and writes an
+# editable environment. An API key does not make that supply-chain path safe to
+# trigger remotely. The job runs fine in packaged builds: the venv lives under
+# the user data dir, not inside the signed app bundle, and uv resolves via
 # OMNIVOICE_BUNDLED_UV/PATH.
 
 
 @router.post(
     "/engines/sidecar/{engine_id}/install",
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_admin), Depends(require_desktop)],
 )
 def install_sidecar_engine(engine_id: str):
     """Start (or report) the one-click install for a sidecar engine.
