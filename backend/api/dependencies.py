@@ -100,25 +100,6 @@ def _server_mode() -> bool:
     return os.environ.get("OMNIVOICE_SERVER_MODE", "").strip().lower() in _TRUTHY
 
 
-def _configured_pin(request) -> str | None:
-    """The active share PIN (``app.state.network_share.pin``) or None. Read via
-    getattr so a bare Request stub (or a request that hit before lifespan set
-    the state) never raises — a missing PIN just means 'no PIN gate'."""
-    app = getattr(request, "app", None)
-    state = getattr(app, "state", None) if app is not None else None
-    ns = getattr(state, "network_share", None) if state is not None else None
-    return getattr(ns, "pin", None) if ns is not None else None
-
-
-def _admin_credential_configured(request) -> bool:
-    """Whether the operator has set ANY credential gate — the remote API key or
-    a share PIN. When neither is set, server mode leaves read-only discovery
-    open (the Docker issue #261 bootstrap flow the image depends on)."""
-    if os.environ.get("OMNIVOICE_API_KEY"):
-        return True
-    return bool(_configured_pin(request))
-
-
 def _request_presents_admin_credential(request) -> bool:
     """Whether the request carries a valid **API key** via the channels the
     middleware accepts (``Authorization: Bearer`` / ``?api_key`` / ``ov_key``
@@ -130,9 +111,9 @@ def _request_presents_admin_credential(request) -> bool:
     playback and is short enough to brute-force (10^6, no lockout), so it must
     never gate the admin surface (CodeRabbit #1213). A trusted-network CIDR
     (``is_local_host`` — also a consumption exemption) likewise never unlocks
-    admin. Net: remote admin in server mode requires the API key; a PIN-only
-    deployment keeps admin loopback-only. getattr-defensive so a minimal Request
-    stub never raises."""
+    admin. Net: remote admin actions in server mode require the API key; a
+    PIN-only deployment cannot authorize them. getattr-defensive so a minimal
+    Request stub never raises."""
     api_key = os.environ.get("OMNIVOICE_API_KEY") or ""
     if not api_key:
         return False
@@ -167,19 +148,18 @@ def require_loopback(request: Request) -> None:
     unenforceable, so the gate can't require true loopback. It then applies the
     admin-credential rule instead:
 
-    - No credential configured (no API key, no PIN) → read-only requests are
-      open, matching the #261 Docker bootstrap flow. State-changing requests
-      fail closed even if a route accidentally kept this legacy dependency.
-    - A credential IS configured → the request must present the **API key**.
+    - No API key configured → read-only requests are open, matching the #261
+      Docker bootstrap flow. State-changing requests fail closed even if a
+      route accidentally kept this legacy dependency.
+    - An API key IS configured → the request must present it.
       This keeps the two-tier privilege model intact under server mode:
       ``OMNIVOICE_TRUSTED_NETWORKS`` is a *consumption* exemption
       (``is_local_host``) that bypasses the PIN / API-key middleware, and it must
       NEVER by itself unlock the admin surface (``/system/set-env`` — RCE-class —
       and ``/api/settings/*``). The 6-digit share PIN is a consumption credential
-      too and does not gate admin, so a PIN-only deployment keeps admin
-      loopback-only; remote admin requires the (long) API key. A LAN client in a
-      trusted CIDR — or one holding only the PIN — gets 403 here even though it
-      sails through the consumption gates. See docs/api-auth.md (#1213).
+      too and cannot authorize an admin action. A PIN-only deployment retains
+      read-only bootstrap discovery; remote changes require the long API key.
+      See docs/api-auth.md (#1213).
     """
     host = request.client.host if request.client else None
     if is_loopback(host):
@@ -192,7 +172,7 @@ def require_loopback(request: Request) -> None:
             # into an unauthenticated Docker write primitive.
             require_admin(request)
             return
-        if not _admin_credential_configured(request):
+        if not os.environ.get("OMNIVOICE_API_KEY", "").strip():
             return
         if _request_presents_admin_credential(request):
             return

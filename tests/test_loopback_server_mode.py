@@ -274,9 +274,9 @@ def test_side_effectful_get_rejects_pin_and_trusted_network(monkeypatch):
 # Server mode + trusted network + credential — issue #1213.
 # Regression for the two-tier collapse: with OMNIVOICE_SERVER_MODE=1 the
 # loopback origin is unenforceable, so admin can't require true loopback. But a
-# configured credential (API key / PIN) must still gate admin — a trusted-network
-# client that presents NO credential must NOT reach /system/* or /api/settings/*
-# just because is_local_host exempts it from the consumption middleware.
+# configured API key must still gate admin — a trusted-network client that
+# presents NO key must NOT reach /system/* or /api/settings/* just because
+# is_local_host exempts it from the consumption middleware.
 
 
 def test_server_mode_trusted_network_no_credential_reaches_admin(monkeypatch):
@@ -325,21 +325,34 @@ def test_server_mode_admin_rejects_wrong_api_key(monkeypatch):
     assert exc.value.status_code == 403
 
 
-def test_server_mode_pin_does_not_unlock_admin(monkeypatch):
+def test_server_mode_pin_only_keeps_read_discovery_but_cannot_unlock_mutations(
+    monkeypatch,
+):
     # CodeRabbit #1213: the 6-digit share PIN is a CONSUMPTION credential and is
     # brute-forceable (10^6, no lockout), so it must NEVER gate the RCE-class
-    # admin surface. With a PIN set but no API key, admin is still *gated* (not
-    # left open) — but only loopback or the long API key can reach it. Presenting
-    # even the correct PIN over the network does NOT unlock admin.
+    # admin surface. With a PIN set but no API key, read-only discovery remains
+    # available for bootstrap, but presenting the PIN cannot authorize a write.
     monkeypatch.setenv("OMNIVOICE_SERVER_MODE", "1")
     monkeypatch.setenv("OMNIVOICE_TRUSTED_NETWORKS", "10.0.0.0/8")
     monkeypatch.delenv("OMNIVOICE_API_KEY", raising=False)
-    # No PIN presented → 403.
+    # Discovery remains available regardless of whether the PIN is presented.
+    require_loopback(_req_full("10.1.2.3", pin="1234"))
+    require_loopback(
+        _req_full("10.1.2.3", pin="1234", headers={"x-omnivoice-pin": "1234"})
+    )
+    # No PIN presented → mutation denied.
     with pytest.raises(HTTPException):
-        require_loopback(_req_full("10.1.2.3", pin="1234"))
-    # Correct PIN presented → STILL 403 (the PIN never gates admin).
+        require_loopback(_req_full("10.1.2.3", pin="1234", method="POST"))
+    # Correct PIN presented → STILL denied (the PIN never gates admin).
     with pytest.raises(HTTPException):
-        require_loopback(_req_full("10.1.2.3", pin="1234", headers={"x-omnivoice-pin": "1234"}))
+        require_loopback(
+            _req_full(
+                "10.1.2.3",
+                pin="1234",
+                method="POST",
+                headers={"x-omnivoice-pin": "1234"},
+            )
+        )
     # Loopback admin still needs no credential (the local operator path)…
     require_loopback(_req_full("127.0.0.1", pin="1234"))
     # …and the trusted client keeps its consumption exemption.
