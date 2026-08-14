@@ -33,6 +33,15 @@ describe('_resolveApiBase', () => {
     expect(_resolveApiBase({ VITE_API_PORT: '4000' }, win)).toBe('http://127.0.0.1:4000');
   });
 
+  it('does not send a development UI back to itself when VITE_API_PORT matches its port', () => {
+    const win = {
+      location: { origin: 'http://127.0.0.1:3000', hostname: '127.0.0.1', port: '3000' },
+    };
+    expect(_resolveApiBase({ DEV: true, VITE_API_PORT: '3000' }, win)).toBe(
+      'http://127.0.0.1:3900',
+    );
+  });
+
   it('runtime window.__OMNIVOICE_API_BASE__ wins over everything (Docker prebuilt-image override)', () => {
     const win = {
       __TAURI__: {},

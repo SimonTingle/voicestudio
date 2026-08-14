@@ -32,6 +32,12 @@ Usage (from the repo root, with the model cached):
 
     python3 scripts/render_gallery.py --out dist/gallery
     python3 scripts/render_gallery.py --out dist/gallery --featured-only
+
+Only the render step is on the GPU; marking, encoding, decoding and detection
+are all CPU, so clips are built ``--jobs`` at a time (4 by default) and the card
+does not sit idle through four stages per clip. ``--resume`` picks up whatever
+is already in the output directory, including MP3s from a run that was
+interrupted before it could write a manifest.
 """
 from __future__ import annotations
 
@@ -110,21 +116,30 @@ async def _build_one(archetype: dict, key: str, work: Path, out_previews: Path) 
     mp3_path = out_previews / f"{key}.mp3"
 
     await _render_archetype_wav(archetype, raw_wav)
-    wav, sr = _load(raw_wav)
+
+    # Everything below that is CPU-bound goes through asyncio.to_thread. The
+    # AudioSeal embed and detection are each a real neural forward pass, and run
+    # inline they hold the event loop for the whole clip — so --jobs above 1
+    # would queue work behind a busy loop and buy nothing. torch releases the
+    # GIL inside those passes, which is what makes threads (rather than
+    # processes) the right tool: no second model copy, no IPC for the tensors.
+    wav, sr = await asyncio.to_thread(_load, raw_wav)
 
     # force=True: the published clip carries the mark regardless of whether the
     # machine doing the publishing has invisible watermarking switched on. Same
     # contract as persona_bundle's preview embed.
-    marked = mark_synthetic(wav, sr, force=True, context="gallery.publish")
+    marked = await asyncio.to_thread(
+        mark_synthetic, wav, sr, force=True, context="gallery.publish"
+    )
     from api.routers.generation import _safe_torchaudio_save
 
-    _safe_torchaudio_save(str(marked_wav), marked, sr)
+    await asyncio.to_thread(_safe_torchaudio_save, str(marked_wav), marked, sr)
     await _encode_mp3(marked_wav, mp3_path)
 
     check_wav = work / f"{key}.check.wav"
     await _decode_wav(mp3_path, check_wav)
-    decoded, decoded_sr = _load(check_wav)
-    verdict = detect_watermark(decoded, decoded_sr)
+    decoded, decoded_sr = await asyncio.to_thread(_load, check_wav)
+    verdict = await asyncio.to_thread(detect_watermark, decoded, decoded_sr)
     if not verdict.get("is_watermarked"):
         mp3_path.unlink(missing_ok=True)
         raise AssertionError(
@@ -144,6 +159,90 @@ async def _build_one(archetype: dict, key: str, work: Path, out_previews: Path) 
         "duration": duration,
         "featured": bool(archetype.get("is_featured")),
     }
+
+
+async def _preflight_watermark() -> None:
+    """Prove the watermark works before rendering a thousand clips.
+
+    Every clip is verified individually, so a broken embed was always caught —
+    but only after the first full render, and the failure named the bitrate
+    ("raise the bitrate or fix the embed") when the real cause can be nothing to
+    do with audio at all. On a machine missing ``python3-dev``, AudioSeal's
+    forward pass dies inside Inductor (``Python.h: No such file``),
+    ``embed_watermark`` catches it, and the clip is returned *unmarked*. Five
+    seconds here beats discovering that at clip 1 of 1126.
+
+    Doubles as a single-threaded warm-up: the generator and detector are lazy
+    module globals, so touching them once before --jobs fans out avoids several
+    threads racing to load the same model.
+    """
+    import torch
+    from services.watermark import detect_watermark, mark_synthetic
+
+    sample_rate = 24000
+    tone = torch.sin(
+        2 * 3.14159 * 220 * torch.arange(sample_rate * 2) / sample_rate
+    ).unsqueeze(0) * 0.3
+    marked = await asyncio.to_thread(
+        mark_synthetic, tone, sample_rate, force=True, context="gallery.preflight"
+    )
+    verdict = await asyncio.to_thread(detect_watermark, marked, sample_rate)
+    if not verdict.get("is_watermarked"):
+        raise SystemExit(
+            "watermark preflight failed: mark_synthetic returned audio the "
+            f"detector does not recognise (confidence {verdict.get('confidence')}). "
+            "Publishing would ship unmarked audio, so this build stops here.\n"
+            "Most common cause: torch.compile/Inductor cannot build its helper "
+            "(missing Python headers — install python3-dev), which makes the "
+            "embed raise and silently pass the audio through unchanged. "
+            "TORCHDYNAMO_DISABLE=1 is the quick workaround."
+        )
+
+
+def _resume_from_disk(out_previews: Path, by_key: dict) -> dict:
+    """Rebuild manifest entries for previews already rendered.
+
+    The manifest is written once, at the end, so a run interrupted at clip 900
+    leaves 900 perfectly good MP3s that ``--resume`` cannot see — it keys off
+    the manifest, so it would render every one of them again. Everything an
+    entry needs is recoverable from the file itself, so recover it.
+    """
+    recovered: dict = {}
+    for mp3_path in sorted(out_previews.glob("*.mp3")):
+        key = mp3_path.stem
+        archetype = by_key.get(key)
+        if archetype is None:
+            continue  # a key from some older catalog — leave it out of the index
+        data = mp3_path.read_bytes()
+        if not data:
+            mp3_path.unlink(missing_ok=True)
+            continue
+        recovered[key] = {
+            "filename": mp3_path.name,
+            "sha256": _sha256(data),
+            "bytes": len(data),
+            "duration": _probe_duration(mp3_path),
+            "featured": bool(archetype.get("is_featured")),
+        }
+    return recovered
+
+
+def _probe_duration(path: Path) -> float:
+    """Duration in seconds, straight from the encoded file."""
+    import subprocess
+
+    from services.ffmpeg_utils import find_ffmpeg
+
+    ffprobe = str(Path(find_ffmpeg()).with_name("ffprobe"))
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+        return round(float(out), 3)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
 
 
 def _write_featured_tarball(out: Path, previews: dict) -> dict:
@@ -197,28 +296,67 @@ async def _main(args: argparse.Namespace) -> int:
 
     previews: dict[str, dict] = {}
     manifest_path = out / "manifest.json"
-    if args.resume and manifest_path.is_file():
-        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
-        previews = {
-            k: e for k, e in (previous.get("previews") or {}).items()
-            if (out_previews / f"{k}.mp3").is_file()
-        }
+    if args.resume:
+        if manifest_path.is_file():
+            previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+            previews = {
+                k: e for k, e in (previous.get("previews") or {}).items()
+                if (out_previews / f"{k}.mp3").is_file()
+            }
+        # Also adopt clips on disk the manifest never got to describe — an
+        # interrupted run has no manifest at all, and re-rendering audio that
+        # is already correct is the most expensive way to do nothing.
+        for key, entry in _resume_from_disk(out_previews, by_key).items():
+            previews.setdefault(key, entry)
+        if previews:
+            print(f"resuming: {len(previews)} preview(s) already rendered", flush=True)
 
+    await _preflight_watermark()
+
+    pending = [k for k in keys if k not in previews]
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="gallery-render-") as tmp:
         work = Path(tmp)
-        for index, key in enumerate(keys, 1):
-            if key in previews:
-                continue
+        # Bounded fan-out. Each clip is render → embed → encode → decode →
+        # detect, and only the first of those is on the GPU: with one clip in
+        # flight the card idles through four CPU stages. The cap keeps that
+        # overlap from turning into unbounded memory (every concurrent clip
+        # holds decoded audio) and matches how the app itself bounds GPU work.
+        limit = asyncio.Semaphore(max(1, args.jobs))
+        completed = 0
+        state = asyncio.Lock()
+
+        async def build(key: str) -> None:
+            nonlocal completed
             archetype = by_key[key]
-            print(f"[{index}/{len(keys)}] {key} {archetype['name']}", flush=True)
-            try:
-                previews[key] = await _build_one(archetype, key, work, out_previews)
-            except AssertionError:
-                raise  # a lost watermark is a build failure, not a bad voice
-            except Exception as exc:
-                failures.append(f"{key} ({archetype['id']}): {type(exc).__name__}: {exc}")
-                print(f"    FAILED: {exc}", file=sys.stderr, flush=True)
+            async with limit:
+                entry = await _build_one(archetype, key, work, out_previews)
+            async with state:
+                previews[key] = entry
+                completed += 1
+                print(f"[{completed}/{len(pending)}] {key} {archetype['name']}", flush=True)
+
+        tasks = [asyncio.create_task(build(key), name=key) for key in pending]
+        try:
+            for task in asyncio.as_completed(tasks):
+                try:
+                    await task
+                except AssertionError:
+                    # A lost watermark is a build failure, not a bad voice —
+                    # stop the whole run rather than let the remaining jobs
+                    # keep writing clips nobody has verified.
+                    for other in tasks:
+                        other.cancel()
+                    raise
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    failures.append(f"{type(exc).__name__}: {exc}")
+                    print(f"    FAILED: {exc}", file=sys.stderr, flush=True)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     if not previews:
         print("nothing rendered", file=sys.stderr)
@@ -258,8 +396,13 @@ def main() -> int:
     parser.add_argument("--featured-only", action="store_true",
                         help="render only the 51 featured archetypes")
     parser.add_argument("--limit", type=int, default=0, help="stop after N keys")
+    parser.add_argument(
+        "--jobs", type=int, default=4,
+        help="clips built concurrently (default 4); 1 restores serial rendering",
+    )
     parser.add_argument("--resume", action="store_true",
-                        help="keep previews already described by <out>/manifest.json")
+                        help="keep previews already in <out> (manifest entries "
+                             "and any MP3s an interrupted run left behind)")
     return asyncio.run(_main(parser.parse_args()))
 
 

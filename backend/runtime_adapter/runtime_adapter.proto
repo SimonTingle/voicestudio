@@ -1,0 +1,199 @@
+syntax = "proto3";
+
+package voicestudio.runtime.v1;
+
+option go_package = "github.com/velixio/vssaas/api/gen/runtime/v1;runtimev1";
+
+// RuntimeAdapterService is local to a GPU Node and is never publicly exposed.
+service RuntimeAdapterService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+  rpc Execute(ExecuteRequest) returns (stream ExecuteResponse);
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+}
+
+message ExecuteResponse { ExecutionEvent event = 1; }
+
+message HealthRequest {}
+
+message HealthResponse {
+  ServingState state = 1;
+  string runtime_version = 2;
+  string adapter_version = 3;
+  repeated string health_flags = 4;
+}
+
+enum ServingState {
+  SERVING_STATE_UNSPECIFIED = 0;
+  SERVING_STATE_READY = 1;
+  SERVING_STATE_DEGRADED = 2;
+  SERVING_STATE_UNHEALTHY = 3;
+}
+
+message GetCapabilitiesRequest {}
+
+message GetCapabilitiesResponse {
+  string runtime_version = 1;
+  string adapter_version = 2;
+  repeated RuntimeDevice devices = 3;
+  repeated RuntimeModel models = 4;
+}
+
+message RuntimeDevice {
+  string device_id = 1;
+  string hardware_class = 2;
+  uint64 total_vram_bytes = 3;
+  uint32 total_slots = 4;
+  uint32 free_slots = 5;
+}
+
+message RuntimeModel {
+  string catalog_model_id = 1;
+  string model_version = 2;
+  string model_digest = 3;
+  repeated string precisions = 4;
+  repeated string features = 5;
+  RuntimeModelState state = 6;
+}
+
+enum RuntimeModelState {
+  RUNTIME_MODEL_STATE_UNSPECIFIED = 0;
+  RUNTIME_MODEL_STATE_INSTALLED = 1;
+  RUNTIME_MODEL_STATE_LOADING = 2;
+  RUNTIME_MODEL_STATE_READY = 3;
+  RUNTIME_MODEL_STATE_FAILED = 4;
+}
+
+message ExecuteRequest {
+  string job_id = 1;
+  string attempt_id = 2;
+  string device_id = 3;
+  string slot_id = 4;
+  ModelSpec model = 5;
+  map<string, ParameterValue> parameters = 6;
+  repeated LocalArtifact inputs = 7;
+  repeated LocalArtifact outputs = 8;
+  int64 deadline_unix_ms = 9;
+  uint32 maximum_preview_bytes = 10;
+}
+
+message ModelSpec {
+  string catalog_model_id = 1;
+  string model_version = 2;
+  string model_digest = 3;
+  string precision = 4;
+}
+
+message ParameterValue {
+  oneof value {
+    string string_value = 1;
+    int64 integer_value = 2;
+    double number_value = 3;
+    bool boolean_value = 4;
+  }
+}
+
+message LocalArtifact {
+  string artifact_id = 1;
+  string local_handle = 2;
+  LocalArtifactOperation operation = 3;
+  uint64 expected_size_bytes = 4;
+  string expected_sha256 = 5;
+  string media_type = 6;
+}
+
+enum LocalArtifactOperation {
+  LOCAL_ARTIFACT_OPERATION_UNSPECIFIED = 0;
+  LOCAL_ARTIFACT_OPERATION_READ = 1;
+  LOCAL_ARTIFACT_OPERATION_WRITE = 2;
+}
+
+message ExecutionEvent {
+  string job_id = 1;
+  string attempt_id = 2;
+  uint64 sequence = 3;
+  int64 observed_at_unix_ms = 4;
+  oneof payload {
+    ExecutionStarted started = 10;
+    ExecutionProgress progress = 11;
+    PreviewChunk preview = 12;
+    ExecutionCompleted completed = 13;
+    ExecutionFailed failed = 14;
+    ExecutionCanceled canceled = 15;
+  }
+}
+
+message ExecutionStarted {}
+
+message ExecutionProgress {
+  uint32 progress_permille = 1;
+  string stage_code = 2;
+}
+
+message PreviewChunk {
+  uint64 sequence = 1;
+  string media_type = 2;
+  bytes data = 3;
+}
+
+message ExecutionCompleted {
+  repeated LocalArtifactManifest outputs = 1;
+  RuntimeMeasurements measurements = 2;
+}
+
+message LocalArtifactManifest {
+  string artifact_id = 1;
+  string local_handle = 2;
+  uint64 size_bytes = 3;
+  string sha256 = 4;
+  string media_type = 5;
+  uint64 duration_ms = 6;
+}
+
+message ExecutionFailed {
+  RuntimeFailureClass failure_class = 1;
+  string stable_code = 2;
+  string safe_detail = 3;
+  RuntimeMeasurements measurements = 4;
+}
+
+message ExecutionCanceled {
+  RuntimeMeasurements measurements = 1;
+}
+
+enum RuntimeFailureClass {
+  RUNTIME_FAILURE_CLASS_UNSPECIFIED = 0;
+  RUNTIME_FAILURE_CLASS_INPUT = 1;
+  RUNTIME_FAILURE_CLASS_MODEL_LOAD = 2;
+  RUNTIME_FAILURE_CLASS_INFERENCE = 3;
+  RUNTIME_FAILURE_CLASS_GPU_RESOURCE = 4;
+  RUNTIME_FAILURE_CLASS_LOCAL_STORAGE = 5;
+  RUNTIME_FAILURE_CLASS_RUNTIME = 6;
+  RUNTIME_FAILURE_CLASS_CANCELED = 7;
+}
+
+message RuntimeMeasurements {
+  uint64 normalized_input_characters = 1;
+  uint64 input_audio_ms = 2;
+  uint64 output_audio_ms = 3;
+  uint64 gpu_execution_ms = 4;
+  uint64 cpu_execution_ms = 5;
+}
+
+message CancelRequest {
+  string job_id = 1;
+  string attempt_id = 2;
+  string reason_code = 3;
+  int64 deadline_unix_ms = 4;
+}
+
+message CancelResponse {
+  CancelDisposition disposition = 1;
+}
+
+enum CancelDisposition {
+  CANCEL_DISPOSITION_UNSPECIFIED = 0;
+  CANCEL_DISPOSITION_ACCEPTED = 1;
+  CANCEL_DISPOSITION_ALREADY_TERMINAL = 2;
+  CANCEL_DISPOSITION_NOT_FOUND = 3;
+}

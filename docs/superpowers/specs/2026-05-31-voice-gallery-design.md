@@ -131,7 +131,9 @@ Gallery tab has two zones (top toggle):
   - `GET /archetypes/{id}/preview` — serve pre-rendered WAV if present; else render
     via the voice-design engine and cache to disk keyed by instruct hash.
   - `POST /archetypes/{id}/use` — render a sample → create a `voice_profile`
-    (rendered WAV as `ref_audio`, archetype `instruct`/`language`) → return profile id.
+    with `kind='design'` (the rendered WAV is an identity sample; the
+    archetype `instruct`/`language` and deterministic render seed remain
+    authoritative) → return profile id.
   - Register in `backend/main.py` alongside the other routers.
 - **Preview cache** — `OUTPUTS_DIR/archetype_previews/<hash>.wav`, served via a new
   static mount or `FileResponse`. Pre-rendered featured WAVs live under

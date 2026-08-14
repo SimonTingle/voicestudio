@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import './index.css';
 import { useAppStore, FONT_STACKS } from './store';
+import { NAV_ITEMS } from './components/navItems';
 import SearchableSelect from './components/SearchableSelect';
 import DirectionDialog from './components/DirectionDialog';
 
@@ -108,6 +109,7 @@ import { clearDubHistory as apiClearDubHistory } from './api/dub';
 import { isTauri, doubleClickMaximize, fileToMediaUrl, playBlobAudio } from './utils/media';
 import { browserDownload } from './utils/download';
 import { downloadMedia } from './utils/mediaDownload';
+import { installDesktopInteractionGuards } from './utils/desktopInteractions';
 import { checkForUpdate, fetchAppVersion } from './utils/updater';
 import { syncChannel } from './utils/channelControl';
 import i18n from './i18n';
@@ -396,6 +398,7 @@ function App() {
     handleLockProfile,
     handleUnlockProfile,
   } = useProfiles({ loadHistory, loadProfiles });
+  const clearSelectedProfile = useCallback(() => setSelectedProfile(null), [setSelectedProfile]);
 
   const {
     refAudio,
@@ -656,7 +659,7 @@ function App() {
     let cancelled = false;
     (async () => {
       if (remoteBackend) {
-        const result = await probeRemoteBackend(remoteBackend.url, remoteBackend.key);
+        const result = await probeRemoteBackend(remoteBackend.url);
         if (cancelled) return;
         setRemoteFailure(result.ok ? null : result);
         setSetupNeeded(false);
@@ -746,63 +749,40 @@ function App() {
   // ── DESKTOP NATIVE INTEGRATION ──
   useEffect(() => {
     if (typeof window === 'undefined') return;
-
-    // 1. Prevent default right-click to hide web nature
-    const handleContextMenu = (e) => {
-      // allow on inputs/textareas for copy/paste
-      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
-      e.preventDefault();
-    };
-
-    // 2. Prevent keyboard quicks (reload, zoom, print)
-    const handleKeyDown = (e) => {
-      if (!e.metaKey && !e.ctrlKey) return;
-      if (['r', 'p', '=', '-', '+'].includes(e.key.toLowerCase())) {
-        e.preventDefault();
-      }
-    };
-
-    // 3. Prevent pinch-to-zoom
-    const handleWheel = (e) => {
-      if (e.ctrlKey) e.preventDefault();
-    };
-
-    // 4. Global Drag and drop for seamless native feeling
-    const handleDrop = (e) => {
-      e.preventDefault();
-      const file = e.dataTransfer?.files[0];
-      if (!file) return;
-
-      const isVideo = file.name.match(/\.(mp4|mov|mkv|webm|avi)$/i);
-      const isAudio = file.name.match(/\.(mp3|wav|flac|m4a|ogg)$/i);
-      if (isVideo || isAudio) {
-        setMode('dub');
-        setDubVideoFile(file);
-        fileToMediaUrl(file, null).then((urls) => setDubLocalBlobUrl(urls));
-        setDubFilename(file.name);
-        setDubStep('idle');
-      }
-    };
-    const handleDragOver = (e) => e.preventDefault();
-
-    window.addEventListener('contextmenu', handleContextMenu);
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('wheel', handleWheel, { passive: false });
-    window.addEventListener('drop', handleDrop);
-    window.addEventListener('dragover', handleDragOver);
-
-    return () => {
-      window.removeEventListener('contextmenu', handleContextMenu);
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('wheel', handleWheel);
-      window.removeEventListener('drop', handleDrop);
-      window.removeEventListener('dragover', handleDragOver);
-    };
+    return installDesktopInteractionGuards({
+      onDrop: (file) => {
+        const isVideo = file.name.match(/\.(mp4|mov|mkv|webm|avi)$/i);
+        const isAudio = file.name.match(/\.(mp3|wav|flac|m4a|ogg)$/i);
+        if (isVideo || isAudio) {
+          setMode('dub');
+          setDubVideoFile(file);
+          fileToMediaUrl(file, null).then((urls) => setDubLocalBlobUrl(urls));
+          setDubFilename(file.name);
+          setDubStep('idle');
+        }
+      },
+    });
   }, []);
 
   // ── KEYBOARD SHORTCUTS ──
   useEffect(() => {
     const handler = (e) => {
+      // In-webview navigation only: using DOM keydown keeps this identical in
+      // browser, macOS, Windows and Linux builds (unlike OS-level hotkeys).
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+        const key = e.key.toLowerCase();
+        if (key === 'e') {
+          e.preventDefault();
+          window.dispatchEvent(new Event('engine-quick-switch'));
+          return;
+        }
+        const index = Number(key);
+        if (index >= 1 && index <= NAV_ITEMS.length) {
+          e.preventDefault();
+          setMode(NAV_ITEMS[index - 1].id);
+          return;
+        }
+      }
       // ⌘+Enter or Ctrl+Enter → Generate
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault();
@@ -1496,7 +1476,7 @@ function App() {
         ) : mode === 'gallery' ? (
           <ErrorBoundary name="gallery">
             <Suspense fallback={<LazyFallback />}>
-              <VoiceGallery />
+              <VoiceGallery clearSelectedProfile={clearSelectedProfile} />
             </Suspense>
           </ErrorBoundary>
         ) : mode === 'transcriptions' ? (
