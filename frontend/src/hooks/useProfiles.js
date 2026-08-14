@@ -40,6 +40,8 @@ export default function useProfiles({ loadHistory, loadProfiles }) {
   const setLanguage = useAppStore((s) => s.setLanguage);
   const setVdStates = useAppStore((s) => s.setVdStates);
   const setDefineMethod = useAppStore((s) => s.setDefineMethod);
+  const setDesignSeed = useAppStore((s) => s.setDesignSeed);
+  const setKeepSeed = useAppStore((s) => s.setKeepSeed);
   const language = useAppStore((s) => s.language);
   const mode = useAppStore((s) => s.mode);
   const steps = useAppStore((s) => s.steps);
@@ -100,6 +102,14 @@ export default function useProfiles({ loadHistory, loadProfiles }) {
       // The profile's kind picks the "Define voice" method implicitly: design
       // profiles open the design controls, everything else the audio path.
       setDefineMethod(profile.kind === 'design' ? 'design' : 'audio');
+      // Gallery archetypes render their identity sample with the profile's
+      // stored seed. Reuse it when that profile is selected: otherwise the
+      // Design workspace sends a fresh random seed and the same archetype
+      // visibly drifts away from its gallery voice on every generation.
+      if (profile.kind === 'design' && Number.isInteger(profile.seed)) {
+        setDesignSeed(profile.seed);
+        setKeepSeed(true);
+      }
       // Design profiles (0005) carry their category picks — restore the sliders
       // so selecting one makes it re-editable, not just re-usable.
       if (profile.kind === 'design' && profile.vd_states) {
@@ -116,7 +126,15 @@ export default function useProfiles({ loadHistory, loadProfiles }) {
         }
       }
     },
-    [setRefText, setInstruct, setLanguage, setVdStates, setDefineMethod],
+    [
+      setRefText,
+      setInstruct,
+      setLanguage,
+      setVdStates,
+      setDefineMethod,
+      setDesignSeed,
+      setKeepSeed,
+    ],
   );
 
   /** Save the current design (vd_states + instruct) as a reusable profile.

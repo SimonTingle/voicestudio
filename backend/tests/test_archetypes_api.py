@@ -181,6 +181,10 @@ def test_use_is_idempotent_dedup(client, monkeypatch):
     from core.db import db_conn
     with db_conn() as conn:
         rows = conn.execute(
-            "SELECT id FROM voice_profiles WHERE personality = ?", (sample["id"],)
+            "SELECT id, kind FROM voice_profiles WHERE personality = ?", (sample["id"],)
         ).fetchall()
     assert len(rows) == 1
+    # An archetype is a voice-design recipe, not an audio clone.  Its rendered
+    # WAV is an identity sample, so it must still use the design conditioning
+    # branch when selected for generation.
+    assert rows[0]["kind"] == "design"

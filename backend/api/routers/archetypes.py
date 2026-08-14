@@ -495,11 +495,11 @@ async def use_archetype(archetype_id: str, name: Optional[str] = Query(None)):
                 return {"profile_id": dup["id"], "name": dup["name"]}
             conn.execute(
                 "INSERT INTO voice_profiles "
-                "(id, name, ref_audio_path, ref_text, instruct, language, seed, personality, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(id, name, ref_audio_path, ref_text, instruct, language, seed, personality, kind, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     profile_id, profile_name, audio_filename, a["sample_script"],
-                    a["instruct"], a["language"], _PREVIEW_SEED, a["id"], time.time(),
+                    a["instruct"], a["language"], _PREVIEW_SEED, a["id"], "design", time.time(),
                 ),
             )
     except Exception:

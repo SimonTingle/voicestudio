@@ -178,6 +178,9 @@ export interface Profile {
   language_code?: string;
   ref_audio?: string;
   ref_text?: string;
+  instruct?: string;
+  /** Deterministic identity seed for a designed profile. */
+  seed?: number | null;
   description?: string;
   created_at?: string;
   is_locked?: boolean;
