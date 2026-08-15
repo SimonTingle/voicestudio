@@ -69,9 +69,10 @@ The Go preflight (`internal/gateway/preflight.go`) fails closed unless:
 
 - `catalog_model_id` — the VoiceStudio TTS engine id (`omnivoice`,
   `voxcpm2`, …) from `services.tts_backend`'s registry.
-- `model_version` — the installed Hugging Face revision (40-char commit SHA)
-  recorded by `services.hf_revisions` (curated pin or the
-  `voicestudio-revision` marker).
+- `model_version` — an immutable catalog version comprising the installed
+  Hugging Face revision (40-char commit SHA) and the first 16 hex characters
+  of the attested snapshot digest. This creates a new catalog identity when
+  snapshot bytes change; it never rewrites an identity retained by a Job.
 - `model_digest` — `sha256:<hex>` computed over the installed snapshot files
   (sorted relative path + per-file SHA-256), cached next to the repo cache
   keyed by (revision, file list, sizes, mtimes) so multi-GB weights are

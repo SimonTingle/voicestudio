@@ -63,6 +63,20 @@ ENGINE_MODEL_REPOS: dict[str, str] = {
 }
 
 
+def catalog_model_version(revision: str, model_digest: str) -> str:
+    """Return the immutable catalog version for an attested model snapshot.
+
+    A Hugging Face revision names source history, not necessarily the exact
+    snapshot bytes installed on a node.  The catalog version therefore carries
+    a short, deterministic digest suffix.  A changed snapshot becomes a new
+    catalog identity instead of mutating an identity retained by Jobs.
+    """
+    digest = model_digest.removeprefix("sha256:")
+    if len(revision) != 40 or len(digest) != 64:
+        raise ValueError("model identity requires a SHA revision and SHA-256 digest")
+    return f"{revision}+sha256-{digest[:16]}"
+
+
 def slots_per_device(default: int = 1) -> int:
     raw = os.environ.get(SLOTS_ENV, "").strip()
     try:
@@ -233,7 +247,7 @@ class ProductionInventory:
             return _replace_state(base, STATE_LOADING)
         return ModelInfo(
             catalog_model_id=base.catalog_model_id,
-            model_version=base.model_version,
+            model_version=catalog_model_version(base.model_version, model_digest),
             model_digest=model_digest,
             precisions=base.precisions,
             features=base.features,

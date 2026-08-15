@@ -27,6 +27,7 @@ from runtime_adapter.inventory import (
     STATE_INSTALLED,
     STATE_LOADING,
     ModelInfo,
+    catalog_model_version,
 )
 from runtime_adapter.selfcheck import PreflightError, run_preflight
 from runtime_adapter.server import prepare_socket
@@ -76,7 +77,7 @@ def test_capabilities_report_device_and_ready_model_evidence(tmp_path):
     by_id = {model.catalog_model_id: model for model in caps.models}
     ready = by_id[READY_MODEL.catalog_model_id]
     assert ready.state == pb2.RUNTIME_MODEL_STATE_READY
-    assert len(ready.model_version) == 40
+    assert ready.model_version.startswith("d" * 40 + "+sha256-")
     assert ready.model_digest.startswith("sha256:")
     assert list(ready.precisions)
     # A loading/failed/installed model is reported truthfully, never READY.
@@ -142,6 +143,15 @@ def test_snapshot_digest_is_stable_and_content_sensitive(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         snapshot_digest(tmp_path / "empty-none")
+
+
+def test_catalog_model_version_changes_when_attested_snapshot_changes():
+    revision = "d" * 40
+    first = catalog_model_version(revision, "sha256:" + "a" * 64)
+    second = catalog_model_version(revision, "sha256:" + "b" * 64)
+
+    assert first.startswith(revision + "+sha256-")
+    assert first != second
 
 
 def test_file_sha256_matches_hashlib(tmp_path):
