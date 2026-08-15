@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { useAppStore } from '../store';
-import { generateSpeech } from '../api/generate';
+import { cancelActiveHostedJob, cancelPendingHostedJobs, generateSpeech } from '../api/generate';
 import { pickDesignSeed } from '../utils/seed';
 import { playBlobAudio, playPing } from '../utils/media';
 import {
@@ -67,6 +67,8 @@ export default function useTTS({ selectedProfile, setSelectedProfile, loadHistor
   const [generationTime, setGenerationTime] = useState(0);
   const timerRef = useRef(null);
   const textAreaRef = useRef(null);
+  const generationAbortRef = useRef(null);
+  const canceledByUserRef = useRef(false);
 
   const ingestRefAudio = useCallback(
     async (file) => {
@@ -109,11 +111,43 @@ export default function useTTS({ selectedProfile, setSelectedProfile, loadHistor
     [text, insertTag],
   );
 
+  const cancelGeneration = useCallback(async () => {
+    // Hosted synthesis observes this signal after admission and sends the
+    // durable cancel command for the queued Job. Before admission it simply
+    // stops staging, so no unsubmitted work is left behind.
+    const controller = generationAbortRef.current;
+    if (!controller) return;
+    try {
+      // Hosted cancellation is durable. Do not change the UI until the server
+      // accepted it; a conflict leaves the active Job visible for retry.
+      await cancelActiveHostedJob(controller.signal);
+      canceledByUserRef.current = true;
+      controller.abort();
+    } catch (error) {
+      toastErrorWithReport(`Could not cancel the job: ${error.message}`, error);
+    }
+  }, []);
+
+  const cancelAllPendingJobs = useCallback(async () => {
+    try {
+      const canceled = await cancelPendingHostedJobs();
+      if (canceled > 0) {
+        toast.success(`Canceled ${canceled} pending ${canceled === 1 ? 'job' : 'jobs'}.`);
+      } else {
+        toast('No pending hosted jobs to cancel.');
+      }
+      await loadHistory();
+    } catch (error) {
+      toastErrorWithReport(`Could not cancel pending jobs: ${error.message}`, error);
+    }
+  }, [loadHistory]);
+
   const handleGenerate = useCallback(async () => {
     if (!text.trim()) return toast.error(t('tts_errors.enter_text'));
     if (defineMethod === 'audio' && !refAudio && !selectedProfile)
       return toast.error(t('tts_errors.upload_or_select'));
     addBreadcrumb(`generate:start (${defineMethod})`);
+    canceledByUserRef.current = false;
     setIsGenerating(true);
     setGenerationTime(0);
     const st = Date.now();
@@ -213,6 +247,7 @@ export default function useTTS({ selectedProfile, setSelectedProfile, loadHistor
       // is unreachable. The ceiling sits just above the backend's load timeout
       // so the backend's descriptive error wins in the normal case.
       const ac = new AbortController();
+      generationAbortRef.current = ac;
       abortTimer = setTimeout(() => ac.abort(), 21 * 60 * 1000);
 
       // #1330 — one voice for both delivery paths. A dropped chunk is not an
@@ -369,13 +404,14 @@ export default function useTTS({ selectedProfile, setSelectedProfile, loadHistor
       // Timeouts are user-recoverable (retry / shorter input) — plain toast.
       // Real generation failures get the "Report this bug" action.
       if (err?.name === 'AbortError') {
-        toast.error(t('tts_errors.timeout'));
+        toast.error(canceledByUserRef.current ? 'Job canceled.' : t('tts_errors.timeout'));
       } else if (modelNotDownloadedPayload(err)) {
         toastModelNotDownloaded(modelNotDownloadedPayload(err));
       } else {
         toastErrorWithReport(t('tts_errors.error_prefix', { message: err.message }), err);
       }
     } finally {
+      generationAbortRef.current = null;
       if (abortTimer) clearTimeout(abortTimer);
       clearInterval(timerRef.current);
       setIsGenerating(false);
@@ -418,5 +454,7 @@ export default function useTTS({ selectedProfile, setSelectedProfile, loadHistor
     insertTag,
     applyPreset,
     handleGenerate,
+    cancelGeneration,
+    cancelAllPendingJobs,
   };
 }

@@ -74,6 +74,8 @@ export default function CloneDesignTab(props) {
     handleSaveProfile,
     handleSaveDesignProfile,
     handleGenerate,
+    cancelGeneration,
+    cancelAllPendingJobs,
     startRecording,
     stopRecording,
     ingestRefAudio,
@@ -444,6 +446,8 @@ export default function CloneDesignTab(props) {
         outputPlaying={outputPlaying}
         isGenerating={isGenerating}
         handleGenerate={handleGenerate}
+        cancelGeneration={cancelGeneration}
+        cancelAllPendingJobs={cancelAllPendingJobs}
         generationTime={generationTime}
         wasGeneratingRef={wasGeneratingRef}
       />

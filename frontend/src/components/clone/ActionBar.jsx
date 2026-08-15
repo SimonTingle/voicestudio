@@ -48,6 +48,8 @@ export default function ActionBar({
   outputPlaying,
   isGenerating,
   handleGenerate,
+  cancelGeneration,
+  cancelAllPendingJobs,
   generationTime,
   wasGeneratingRef,
 }) {
@@ -265,13 +267,12 @@ export default function ActionBar({
         <Button
           variant="primary"
           block
-          loading={isGenerating}
-          onClick={handleGenerate}
-          leading={!isGenerating && <Play size={14} />}
+          onClick={isGenerating ? cancelGeneration : handleGenerate}
+          leading={isGenerating ? <Square size={14} /> : <Play size={14} />}
           className="mt-[6px]"
         >
           {isGenerating
-            ? t('clone.synthesizing', { seconds: generationTime })
+            ? 'Cancel job'
             : t('clone.synthesize')}
         </Button>
       )}
@@ -283,6 +284,14 @@ export default function ActionBar({
           className="mt-[6px]"
         />
       )}
+      <Button
+        variant="ghost"
+        block
+        onClick={cancelAllPendingJobs}
+        className="mt-[4px]"
+      >
+        Cancel all pending jobs
+      </Button>
       {/* 10x P4 a11y (spec §3): persistent polite live region — screen
             readers hear generation start AND finish in-workspace, without
             relying on the FloatingPill. sr-only keeps it out of the

@@ -55,6 +55,19 @@ export async function generateSpeech(
   }
 }
 
+// Hosted builds replace this module and provide tenant-scoped durable Job
+// cancellation. Local VoiceStudio has no durable hosted Job queue, so its
+// equivalent is intentionally a no-op rather than a cloud dependency.
+export async function cancelPendingHostedJobs(): Promise<number> {
+  return 0;
+}
+
+// The local backend has no durable hosted Job to cancel. Returning false lets
+// the caller stop its local request directly.
+export async function cancelActiveHostedJob(_signal: AbortSignal): Promise<boolean> {
+  return false;
+}
+
 export async function listHistory(): Promise<unknown> {
   return apiJson('/history');
 }

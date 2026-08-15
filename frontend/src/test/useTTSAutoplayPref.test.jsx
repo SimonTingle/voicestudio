@@ -8,7 +8,7 @@ import {
   streamGenerateSpeech,
   supportsStreamingPreview,
 } from '../utils/streamingTts';
-import { generateSpeech } from '../api/generate';
+import { cancelActiveHostedJob, generateSpeech } from '../api/generate';
 import toast from 'react-hot-toast';
 
 // #1032: Settings → Appearance "Auto-play preview" ("play the output as soon
@@ -31,6 +31,8 @@ vi.mock('../api/generate', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
+    cancelActiveHostedJob: vi.fn().mockResolvedValue(false),
+    cancelPendingHostedJobs: vi.fn().mockResolvedValue(0),
     generateSpeech: vi.fn().mockImplementation(async () => {
       let served = false;
       return {
@@ -110,6 +112,73 @@ describe('useTTS auto-play pref (#1032)', () => {
     useAppStore.setState({ autoPlayPreview: false });
     await runGenerate();
     expect(playBlobAudio).not.toHaveBeenCalled();
+  });
+});
+
+describe('useTTS hosted cancellation', () => {
+  it('aborts an in-flight hosted synthesis when the user cancels it', async () => {
+    let rejectGeneration;
+    vi.mocked(generateSpeech).mockImplementationOnce((_formData, { signal }) =>
+      new Promise((_resolve, reject) => {
+        rejectGeneration = reject;
+        signal.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'));
+        });
+      }),
+    );
+    const { result } = renderHook(() => useTTS(hookProps()));
+    let generation;
+    await act(async () => {
+      generation = result.current.handleGenerate();
+      await Promise.resolve();
+    });
+
+    expect(result.current.isGenerating).toBe(true);
+    await act(async () => {
+      await result.current.cancelGeneration();
+      await generation;
+    });
+
+    expect(rejectGeneration).toBeTypeOf('function');
+    expect(result.current.isGenerating).toBe(false);
+  });
+
+  it('keeps the job active when the cancellation API rejects it', async () => {
+    let resolveGeneration;
+    vi.mocked(generateSpeech).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveGeneration = resolve;
+        }),
+    );
+    vi.mocked(cancelActiveHostedJob).mockRejectedValueOnce(
+      new Error('The Job cancellation could not be accepted.'),
+    );
+
+    const { result } = renderHook(() => useTTS(hookProps()));
+    let generation;
+    await act(async () => {
+      generation = result.current.handleGenerate();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.cancelGeneration();
+    });
+
+    expect(result.current.isGenerating).toBe(true);
+
+    await act(async () => {
+      resolveGeneration({
+        body: {
+          getReader: () => ({
+            read: async () => ({ done: true, value: undefined }),
+          }),
+        },
+        headers: { get: () => null },
+      });
+      await generation;
+    });
   });
 });
 
