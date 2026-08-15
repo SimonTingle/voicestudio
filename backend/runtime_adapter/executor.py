@@ -44,6 +44,9 @@ PARAMETER_SPECS: dict[str, tuple] = {
     "speed": ("number", 0.25, 4.0),
     "guidance_scale": ("number", 0.0, 16.0),
     "num_step": ("integer", 1, 128),
+    # Gallery reference voices persist their OSS design seed.  Accept it at
+    # the hosted runtime boundary so a selected voice produces the same take.
+    "seed": ("integer", 0, 4_294_967_295),
 }
 
 

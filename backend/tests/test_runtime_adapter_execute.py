@@ -88,6 +88,22 @@ def test_execute_passes_typed_parameters_to_the_engine(tmp_path):
     assert kwargs == {"speed": 1.5, "language": "en", "num_step": 8}
 
 
+def test_execute_passes_seed_to_the_engine(tmp_path):
+    """Hosted Gallery defaults must retain the OSS deterministic seed."""
+    from _runtime_adapter_helpers import FakeEngine
+
+    engine = FakeEngine()
+    context = make_context(engine=engine)
+    request = make_execute_request(
+        tmp_path,
+        parameters={"seed": pb2.ParameterValue(integer_value=42)},
+    )
+    events = _run_direct(context, request)
+    assert terminal_of(events)[0] == "completed"
+    [(_, kwargs)] = engine.generate_calls
+    assert kwargs == {"seed": 42}
+
+
 # ── deadline ──────────────────────────────────────────────────────────────
 
 
