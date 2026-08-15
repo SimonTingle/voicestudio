@@ -44,7 +44,7 @@ def test_migration_marks_only_materialized_archetypes_as_design(tmp_path):
     with sqlite3.connect(str(database)) as conn:
         conn.executescript(_BASE_PROFILES)
 
-    _upgrade(str(database), target="0010_remote_worker_schema")
+    _upgrade(str(database), target="0011_hosted_voice_sync")
     with sqlite3.connect(str(database)) as conn:
         conn.executemany(
             "INSERT INTO voice_profiles (id, name, personality, kind) VALUES (?, ?, ?, 'clone')",

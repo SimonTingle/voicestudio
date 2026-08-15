@@ -57,6 +57,9 @@ _BASE_SCHEMA = """
         consent_recorded_at REAL DEFAULT NULL,
         kind TEXT DEFAULT 'clone',
         vd_states TEXT DEFAULT NULL,
+        -- Hosted Voice ID is opt-in synchronization metadata. Local synthesis
+        -- never depends on it, so existing offline profiles remain useful.
+        hosted_voice_id TEXT DEFAULT '',
         created_at REAL
     );
     CREATE TABLE IF NOT EXISTS generation_history (

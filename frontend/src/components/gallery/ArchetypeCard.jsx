@@ -1,7 +1,11 @@
 import React from 'react';
 import { BookOpen, Ellipsis, Headphones, Loader, Play, Star, UserPlus, Wand2 } from 'lucide-react';
 import { Menu } from '../../ui';
-import { ArchetypeAvatar, NowPlaying, USE_CASE_COLOR } from '../../utils/archetypeIcons';
+import {
+  ArchetypeAvatar,
+  NowPlaying,
+  USE_CASE_COLOR,
+} from '../../utils/archetypeIcons';
 import { facetLabel } from './constants';
 
 // ── Archetype card ───────────────────────────────────────────────────────────

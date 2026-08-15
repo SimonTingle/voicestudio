@@ -1146,6 +1146,9 @@ async def generate_speech(
     # classic flow, so streaming is purely a delivery channel — engine-agnostic
     # (text-level chunking, no per-engine token streaming).
     stream: bool = Form(False),
+    # Explicit opt-in. The absence of this field preserves the local-first
+    # /generate contract even when an administrator configured hosted values.
+    hosted: bool = Form(False),
 ):
     # #502: NFC-normalize the input text so decomposed (NFD) diacritics — common
     # in pasted Vietnamese and other Latin-with-marks text — are composed to the
@@ -1155,6 +1158,36 @@ async def generate_speech(
     # (utils/duration.py) so the estimate and the synthesis see the same text.
     import unicodedata
     text = unicodedata.normalize("NFC", text)
+
+    if hosted:
+        # Hosted execution accepts only a previously, explicitly synchronized
+        # consent-verified profile. Never silently sync a local recording from
+        # a synthesis request: that would make normal offline use an upload.
+        if not profile_id:
+            raise HTTPException(status_code=422, detail="Hosted synthesis requires a synchronized voice profile.")
+        from services.hosted_voice_api import HostedSettings, HostedVoiceClient, HostedVoiceError
+        try:
+            settings = HostedSettings.from_environment()
+        except HostedVoiceError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if settings is None:
+            raise HTTPException(status_code=409, detail="Hosted synthesis is not configured on this device.")
+        with db_conn() as conn:
+            profile = conn.execute("SELECT hosted_voice_id, language FROM voice_profiles WHERE id=?", (profile_id,)).fetchone()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Voice profile not found")
+        if not profile["hosted_voice_id"]:
+            raise HTTPException(status_code=422, detail="Sync this consent-verified profile to hosted before hosted synthesis.")
+        client = HostedVoiceClient(settings)
+        try:
+            audio = await client.synthesize(
+                text=text, profile_voice_id=profile["hosted_voice_id"], language=language or profile["language"],
+            )
+        except HostedVoiceError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            await client.aclose()
+        return StreamingResponse(io.BytesIO(audio), media_type="audio/wav", headers={"X-OmniVoice-Execution": "hosted"})
 
     # ── Engine resolution (issue #312) ──────────────────────────────────────
     # The request runs on the engine selected in Settings (POST /engines/select,

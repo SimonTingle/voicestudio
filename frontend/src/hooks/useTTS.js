@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { useAppStore } from '../store';
-import { generateSpeech } from '../api/generate';
+import { cancelActiveHostedJob, cancelPendingHostedJobs, generateSpeech } from '../api/generate';
 import { pickDesignSeed } from '../utils/seed';
 import { playBlobAudio, playPing } from '../utils/media';
 import {
@@ -112,11 +112,35 @@ export default function useTTS({ selectedProfile, setSelectedProfile, loadHistor
   );
 
   const cancelGeneration = useCallback(async () => {
+    // Hosted synthesis observes this signal after admission and sends the
+    // durable cancel command for the queued Job. Before admission it simply
+    // stops staging, so no unsubmitted work is left behind.
     const controller = generationAbortRef.current;
     if (!controller) return;
-    canceledByUserRef.current = true;
-    controller.abort();
+    try {
+      // Hosted cancellation is durable. Do not change the UI until the server
+      // accepted it; a conflict leaves the active Job visible for retry.
+      await cancelActiveHostedJob(controller.signal);
+      canceledByUserRef.current = true;
+      controller.abort();
+    } catch (error) {
+      toastErrorWithReport(`Could not cancel the job: ${error.message}`, error);
+    }
   }, []);
+
+  const cancelAllPendingJobs = useCallback(async () => {
+    try {
+      const canceled = await cancelPendingHostedJobs();
+      if (canceled > 0) {
+        toast.success(`Canceled ${canceled} pending ${canceled === 1 ? 'job' : 'jobs'}.`);
+      } else {
+        toast('No pending hosted jobs to cancel.');
+      }
+      await loadHistory();
+    } catch (error) {
+      toastErrorWithReport(`Could not cancel pending jobs: ${error.message}`, error);
+    }
+  }, [loadHistory]);
 
   const handleGenerate = useCallback(async () => {
     if (!text.trim()) return toast.error(t('tts_errors.enter_text'));
@@ -431,5 +455,6 @@ export default function useTTS({ selectedProfile, setSelectedProfile, loadHistor
     applyPreset,
     handleGenerate,
     cancelGeneration,
+    cancelAllPendingJobs,
   };
 }
