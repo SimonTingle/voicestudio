@@ -53,9 +53,8 @@ export function _resolveApiBase(env: any, win: any): string {
   // both variables. Preserve explicit API URLs (which may name a real proxy),
   // while making the port-only configuration recover to the local backend.
   const requestedPort = String(env?.VITE_API_PORT || defaultPort);
-  const port = env?.DEV && requestedPort === String(win?.location?.port || '')
-    ? defaultPort
-    : requestedPort;
+  const port =
+    env?.DEV && requestedPort === String(win?.location?.port || '') ? defaultPort : requestedPort;
   // Explicit override, in precedence order:
   //   1. localStorage ov_backend_url — the user's explicit "Remote backend"
   //      setting (Wave 2.3). Beats everything: it's the one override a

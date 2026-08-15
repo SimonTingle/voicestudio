@@ -1,7 +1,7 @@
 """Mark materialized gallery archetypes as voice-design profiles.
 
 Revision ID: 0012_mark_archetype_profiles_design
-Revises: 0011_hosted_voice_sync
+Revises: 0010_remote_worker_schema
 Create Date: 2026-08-15 00:00:00.000000
 
 ``POST /archetypes/{id}/use`` stores the archetype id in ``personality`` and
@@ -19,7 +19,7 @@ from sqlalchemy import inspect
 
 
 revision: str = "0012_mark_archetype_profiles_design"
-down_revision: Union[str, None] = "0011_hosted_voice_sync"
+down_revision: Union[str, None] = "0010_remote_worker_schema"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

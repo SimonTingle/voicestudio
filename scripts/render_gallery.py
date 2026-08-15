@@ -106,10 +106,17 @@ def _load(path: Path):
     return wav, int(sr)
 
 
+def _mark_for_gallery(wav, sample_rate: int, context: str):
+    """Embed a mandatory provenance mark without blocking the event loop."""
+    from services.watermark import mark_synthetic
+
+    return mark_synthetic(wav, sample_rate, force=True, context=context)
+
+
 async def _build_one(archetype: dict, key: str, work: Path, out_previews: Path) -> dict:
     """Render, mark, encode, verify — returns the manifest entry for *key*."""
     from api.routers.archetypes import _render_archetype_wav
-    from services.watermark import detect_watermark, mark_synthetic
+    from services.watermark import detect_watermark
 
     raw_wav = work / f"{key}.raw.wav"
     marked_wav = work / f"{key}.marked.wav"
@@ -128,9 +135,7 @@ async def _build_one(archetype: dict, key: str, work: Path, out_previews: Path) 
     # force=True: the published clip carries the mark regardless of whether the
     # machine doing the publishing has invisible watermarking switched on. Same
     # contract as persona_bundle's preview embed.
-    marked = await asyncio.to_thread(
-        mark_synthetic, wav, sr, force=True, context="gallery.publish"
-    )
+    marked = await asyncio.to_thread(_mark_for_gallery, wav, sr, "gallery.publish")
     from api.routers.generation import _safe_torchaudio_save
 
     await asyncio.to_thread(_safe_torchaudio_save, str(marked_wav), marked, sr)
@@ -177,15 +182,13 @@ async def _preflight_watermark() -> None:
     threads racing to load the same model.
     """
     import torch
-    from services.watermark import detect_watermark, mark_synthetic
+    from services.watermark import detect_watermark
 
     sample_rate = 24000
     tone = torch.sin(
         2 * 3.14159 * 220 * torch.arange(sample_rate * 2) / sample_rate
     ).unsqueeze(0) * 0.3
-    marked = await asyncio.to_thread(
-        mark_synthetic, tone, sample_rate, force=True, context="gallery.preflight"
-    )
+    marked = await asyncio.to_thread(_mark_for_gallery, tone, sample_rate, "gallery.preflight")
     verdict = await asyncio.to_thread(detect_watermark, marked, sample_rate)
     if not verdict.get("is_watermarked"):
         raise SystemExit(

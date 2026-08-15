@@ -413,7 +413,6 @@ function App() {
     applyPreset,
     handleGenerate,
     cancelGeneration,
-    cancelAllPendingJobs,
   } = useTTS({ selectedProfile, setSelectedProfile, loadHistory, profiles });
 
   const handleSaveProfile = () => _handleSaveProfile(refAudio, refText, instruct, language);
@@ -1720,7 +1719,6 @@ function App() {
                     handleSaveDesignProfile={handleSaveDesignProfile}
                     handleGenerate={handleGenerate}
                     cancelGeneration={cancelGeneration}
-                    cancelAllPendingJobs={cancelAllPendingJobs}
                     startRecording={startRecording}
                     stopRecording={stopRecording}
                     ingestRefAudio={ingestRefAudio}
