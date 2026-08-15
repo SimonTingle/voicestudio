@@ -618,6 +618,28 @@ class _EngineWorker:
         )
         thread.start()
 
+    @staticmethod
+    def _synthesize(engine, text: str, params: dict):
+        """Use the same seeded native path as OSS Gallery and ovnode workers."""
+        from services import tts_backend  # noqa: PLC0415
+
+        if isinstance(engine, tts_backend.OmniVoiceBackend):
+            from api.routers.generation import _run_inference  # noqa: PLC0415
+
+            with tts_backend.engine_in_use(engine):
+                return _run_inference(
+                    engine._model, text, params.get("language"),
+                    params.get("ref_audio"), params.get("ref_text"),
+                    params.get("instruct"), params.get("duration"),
+                    params.get("num_step", 16), params.get("guidance_scale", 2.0),
+                    params.get("speed", 1.0), params.get("t_shift"),
+                    params.get("denoise", True), params.get("postprocess_output", True),
+                    params.get("layer_penalty_factor"),
+                    params.get("position_temperature"),
+                    params.get("class_temperature"), params.get("seed"),
+                )
+        return engine.generate(text, **params)
+
     def _run(self) -> None:
         wall_start = time.monotonic()
         cpu_start = time.process_time()
@@ -629,7 +651,7 @@ class _EngineWorker:
             self.phase = "synthesis"
             self._session.phase = "synthesis"
             synth_start = time.monotonic()
-            self.result = engine.generate(self._validated.text, **self._validated.engine_kwargs)
+            self.result = self._synthesize(engine, self._validated.text, self._validated.engine_kwargs)
             rate = getattr(engine, "sample_rate", None)
             self.sample_rate = int(rate) if isinstance(rate, (int, float)) and rate else None
             self._session.gpu_ms = int((time.monotonic() - synth_start) * 1000)
