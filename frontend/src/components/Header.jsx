@@ -155,6 +155,11 @@ export default function Header({
   // only re-renders the header chrome, not the whole App tree.
   const sysQuery = useSysinfo();
   const sysStats = sysQuery.data ?? null;
+  const hasRamStats =
+    Number.isFinite(sysStats?.ram) && Number.isFinite(sysStats?.total_ram);
+  const hasCpuStats = Number.isFinite(sysStats?.cpu);
+  const hasVramStats = Number.isFinite(sysStats?.vram);
+  const hasLiveStats = hasRamStats || hasCpuStats || hasVramStats;
   // Default OFF — chrome shouldn't double as a resource monitor. Power users
   // flip this on via Settings → Performance. Idle/Ready/Loading badge +
   // Flush button stay visible regardless (action-relevant).
@@ -327,27 +332,33 @@ export default function Header({
         />
         {sysStats && (
           <div className="flex items-center gap-[10px] [font-family:var(--chrome-font-mono)] text-[10.5px] text-[var(--chrome-fg-dim)] bg-transparent h-[var(--chrome-pill-h)] whitespace-nowrap shrink overflow-hidden tabular-nums slashed-zero max-[851px]:hidden!">
-            {showLiveStats && (
+            {showLiveStats && hasLiveStats && (
               <>
-                <span className="max-[1081px]:hidden">
-                  <b className="text-[var(--chrome-fg-muted)] font-semibold">RAM</b>{' '}
-                  {sysStats.ram.toFixed(1)}/{sysStats.total_ram.toFixed(0)}G
-                </span>
-                <span className="max-[1081px]:hidden">
-                  <b className="text-[var(--chrome-fg-muted)] font-semibold">CPU</b>{' '}
-                  {sysStats.cpu.toFixed(0)}%
-                </span>
-                <span
-                  className="[border-left:1px_solid_var(--chrome-border)] pl-[6px]"
-                  aria-label={`VRAM usage: ${sysStats.vram.toFixed(1)} gigabytes`}
-                >
-                  <b
-                    className={`font-semibold ${sysStats.gpu_active ? 'text-[var(--chrome-severity-ok)]' : 'text-[var(--chrome-fg-muted)]'}`}
+                {hasRamStats && (
+                  <span className="max-[1081px]:hidden">
+                    <b className="text-[var(--chrome-fg-muted)] font-semibold">RAM</b>{' '}
+                    {sysStats.ram.toFixed(1)}/{sysStats.total_ram.toFixed(0)}G
+                  </span>
+                )}
+                {hasCpuStats && (
+                  <span className="max-[1081px]:hidden">
+                    <b className="text-[var(--chrome-fg-muted)] font-semibold">CPU</b>{' '}
+                    {sysStats.cpu.toFixed(0)}%
+                  </span>
+                )}
+                {hasVramStats && (
+                  <span
+                    className="[border-left:1px_solid_var(--chrome-border)] pl-[6px]"
+                    aria-label={`VRAM usage: ${sysStats.vram.toFixed(1)} gigabytes`}
                   >
-                    VRAM
-                  </b>{' '}
-                  {sysStats.vram.toFixed(1)}G
-                </span>
+                    <b
+                      className={`font-semibold ${sysStats.gpu_active ? 'text-[var(--chrome-severity-ok)]' : 'text-[var(--chrome-fg-muted)]'}`}
+                    >
+                      VRAM
+                    </b>{' '}
+                    {sysStats.vram.toFixed(1)}G
+                  </span>
+                )}
               </>
             )}
             {/* Where the next job runs. Renders nothing until at least one

@@ -13,6 +13,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 
 import Header from '../components/Header';
+import { queryKeys } from '../api/hooks';
+import { useAppStore } from '../store';
 
 const windowActions = vi.hoisted(() => ({
   minimize: vi.fn(async () => {}),
@@ -24,11 +26,13 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => windowActions
 
 afterEach(() => {
   delete window.__TAURI_INTERNALS__;
+  useAppStore.setState({ showHeaderLiveStats: false });
   vi.clearAllMocks();
 });
 
-function renderHeader(props) {
+function renderHeader(props, sysinfo) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  if (sysinfo) qc.setQueryData(queryKeys.sysinfo, sysinfo);
   return render(
     <QueryClientProvider client={qc}>
       <Header mode="dub" setMode={() => {}} modelStatus="idle" {...props} />
@@ -37,6 +41,15 @@ function renderHeader(props) {
 }
 
 describe('Header — rail mode (default)', () => {
+  it('treats resource metrics as optional on hosted backends', () => {
+    useAppStore.setState({ showHeaderLiveStats: true });
+
+    expect(() => renderHeader({}, { platform: 'web' })).not.toThrow();
+    expect(screen.queryByText('RAM')).toBeNull();
+    expect(screen.queryByText('CPU')).toBeNull();
+    expect(screen.queryByText('VRAM')).toBeNull();
+  });
+
   it('keeps the breadcrumb and wordmark, and renders no tab strip', () => {
     const { container } = renderHeader({});
     expect(container.querySelector('.tabstrip')).toBeNull();
