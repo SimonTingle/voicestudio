@@ -518,9 +518,12 @@ _ingest_gen       = dub_pipeline.ingest_pipeline
 #: container so a mislabelled video can't slip past the video-skipping branch.
 _AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}
 
-# Source-language choices exposed by the first-party dub UI. Keeping this an
-# allow-list rejects language names and private-use BCP-47 tags before they are
-# persisted as ASR overrides. Values are normalized to lowercase below.
+# Source-language choices exposed by the first-party dub UI, plus every
+# two-letter code Whisper can write back after auto-detection. A restored job
+# may reuse that detected value as the next upload's override, so rejecting our
+# own persisted codes strands otherwise valid dubbing sessions (#1737).
+# Keeping this an allow-list still rejects language names and private-use
+# BCP-47 tags. Values are normalized to lowercase below.
 _DUB_SOURCE_LANG_CODES = frozenset({
     "af", "sq", "am", "ar", "hy", "az", "eu", "be", "bn", "bs", "bg",
     "my", "ca", "cmn-hans", "cmn-hant", "hr", "cs", "da", "nl", "en",
@@ -531,6 +534,8 @@ _DUB_SOURCE_LANG_CODES = frozenset({
     "ru", "sm", "gd", "sr", "sn", "sd", "si", "sk", "sl", "so", "es",
     "su", "sw", "sv", "tg", "ta", "te", "th", "tr", "uk", "ur", "uz",
     "vi", "cy", "xh", "yi", "yo", "zu",
+    "as", "ba", "bo", "br", "fo", "lb", "ln", "mg", "nn", "oc", "sa",
+    "tk", "tl", "tt", "yue", "zh",
 })
 
 

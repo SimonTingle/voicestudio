@@ -339,3 +339,12 @@ class TestAudioOnlyDubbing:
 
         assert response.status_code == 202
         assert queued[0][5]["source_lang"] == "fr"
+
+    def test_asr_detected_source_languages_can_be_reused_as_overrides(self, app_client):
+        _client, dc, _dx, _tmp = app_client
+        detected_codes = {
+            "as", "ba", "bo", "br", "fo", "lb", "ln", "mg", "nn", "oc",
+            "sa", "tk", "tl", "tt", "yue", "zh",
+        }
+
+        assert {dc._source_lang_override(code) for code in detected_codes} == detected_codes
