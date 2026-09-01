@@ -356,3 +356,5 @@ class TestAudioOnlyDubbing:
         assert dc._detected_source_lang("yue") == "yue"
         assert dc._detected_source_lang("es_ES") == "es"
         assert dc._detected_source_lang("unknown-language") == "en"
+        assert dc._resolved_source_lang(None, "yue") == "yue"
+        assert dc._resolved_source_lang("fr", "yue") == "fr"
