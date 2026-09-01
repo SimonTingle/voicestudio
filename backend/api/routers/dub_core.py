@@ -519,7 +519,7 @@ _ingest_gen       = dub_pipeline.ingest_pipeline
 _AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}
 
 # Source-language choices exposed by the first-party dub UI, plus every
-# two-letter code Whisper can write back after auto-detection. A restored job
+# language code Whisper can write back after auto-detection. A restored job
 # may reuse that detected value as the next upload's override, so rejecting our
 # own persisted codes strands otherwise valid dubbing sessions (#1737).
 # Keeping this an allow-list still rejects language names and private-use
