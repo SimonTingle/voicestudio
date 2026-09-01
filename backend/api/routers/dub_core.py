@@ -549,6 +549,15 @@ def _source_lang_override(value: str | None) -> str | None:
     return code
 
 
+def _detected_source_lang(value: str | None) -> str:
+    """Normalize an ASR language without truncating valid three-letter codes."""
+    code = (value or "en").split("_", 1)[0].strip().lower()
+    if code in _DUB_SOURCE_LANG_CODES:
+        return code
+    short = code[:2]
+    return short if short in _DUB_SOURCE_LANG_CODES else "en"
+
+
 @router.post("/dub/upload")
 async def dub_upload(
     video: UploadFile = File(...),
@@ -1814,9 +1823,9 @@ async def dub_transcribe_stream(
         except Exception as e:
             logger.warning("speaker_clone extraction skipped: %s", e)
 
-        job["source_lang"] = job.get("source_lang_override") or (
-            (detected_lang or "en").split("_")[0][:2] or "en"
-        ).lower()
+        job["source_lang"] = job.get("source_lang_override") or _detected_source_lang(
+            detected_lang
+        )
         job["full_transcript"] = " ".join(s.get("text", "") for s in final_segs)
         _save_job(job_id, job)
 
@@ -2013,9 +2022,9 @@ async def dub_transcribe(job_id: str, num_speakers: Optional[int] = None):
             except Exception as e:
                 logger.warning("Failed to unload ASR backend: %s", e)
 
-        job["source_lang"] = job.get("source_lang_override") or (
-            (detected_lang or "en").split("_")[0][:2] or "en"
-        ).lower()
+        job["source_lang"] = job.get("source_lang_override") or _detected_source_lang(
+            detected_lang
+        )
 
         scene_cuts = job.get("scene_cuts") or []
         segments = segment_transcript(result, duration=job.get("duration", 0.0), scene_cuts=scene_cuts)

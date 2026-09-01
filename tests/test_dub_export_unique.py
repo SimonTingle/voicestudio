@@ -347,4 +347,12 @@ class TestAudioOnlyDubbing:
             "sa", "tk", "tl", "tt", "yue", "zh",
         }
 
-        assert {dc._source_lang_override(code) for code in detected_codes} == detected_codes
+        for code in detected_codes:
+            assert dc._source_lang_override(code) == code
+
+    def test_asr_detected_cantonese_code_is_not_truncated(self, app_client):
+        _client, dc, _dx, _tmp = app_client
+
+        assert dc._detected_source_lang("yue") == "yue"
+        assert dc._detected_source_lang("es_ES") == "es"
+        assert dc._detected_source_lang("unknown-language") == "en"
