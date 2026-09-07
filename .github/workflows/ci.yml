@@ -7,14 +7,20 @@ jobs:
   diagnostic:
     runs-on: windows-2022
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        policy: [absent, dword, string, invalid-msi]
     steps:
       - uses: actions/checkout@v4
       - name: Diagnose actual preview153 MSI as standard user
         shell: powershell
-        run: ./scripts/diagnose-msi-policy.ps1
+        run: ./scripts/test-msi-policy-restoration.ps1 -Case "${{ matrix.policy }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: msi-policy-diagnostics
-          path: C:/Users/Public/vs-msi-policy/
+          name: msi-policy-${{ matrix.policy }}
+          path: |
+            C:/Users/Public/vs-msi-policy/
+            C:/Users/Public/VoiceStudioMsiSmoke-*/
           retention-days: 3
