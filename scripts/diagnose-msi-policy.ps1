@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $dir = 'C:\Users\Public\vs-msi-policy'
 New-Item -ItemType Directory -Force $dir | Out-Null
 & icacls $dir /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
@@ -23,7 +24,7 @@ $before = if ($hadPolicy) { Get-ItemProperty $policy } else { $null }
 $hadDisable = $null -ne $before -and $null -ne $before.PSObject.Properties['DisableMSI']
 $oldDisable = if ($hadDisable) { $before.DisableMSI } else { $null }
 Get-ItemProperty $policy,'HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer' -ErrorAction SilentlyContinue | Format-List * | Out-File "$dir/policies-before.txt"
-$user = 'VoiceStudioPolicyTest'
+$user = 'VsPolicyTest'
 $password = 'VsPolicy-' + [guid]::NewGuid().ToString('N') + '!'
 $secure = ConvertTo-SecureString $password -AsPlainText -Force
 $credential = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\$user", $secure)
