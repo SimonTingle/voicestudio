@@ -20,8 +20,11 @@ try {
         $log = "$artifacts/$scope.log"
         $ErrorActionPreference = 'Continue'
         if ($scope -eq 'system') {
+            # Mirror release-only build input without using any secret.
+            $env:VITE_POSTHOG_KEY = 'diagnostic-placeholder'
             & bun x tauri build -vv --target $target --bundles msi --config diagnostic-unsigned.json *> $log
         } elseif ($scope -eq 'per-user-original') {
+            Remove-Item Env:VITE_POSTHOG_KEY -ErrorAction SilentlyContinue
             & bun x tauri build -vv --target $target --bundles msi --config src-tauri/tauri.per-user.conf.json --config diagnostic-unsigned.json *> $log
         } else {
             & bun x tauri bundle -vv --target $target --bundles msi --config src-tauri/tauri.per-user.conf.json --config diagnostic-unsigned.json *> $log
