@@ -16,6 +16,10 @@ jobs:
       - name: Diagnose actual preview153 MSI as standard user
         shell: powershell
         run: ./scripts/test-msi-policy-restoration.ps1 -Case "${{ matrix.policy }}"
+      - name: Verify durable cleanup guard
+        if: matrix.policy == 'invalid-msi'
+        shell: powershell
+        run: ./scripts/test-msi-policy-cleanup.ps1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
