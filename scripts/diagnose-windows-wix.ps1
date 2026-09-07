@@ -5,6 +5,10 @@ $repo = Split-Path -Parent $PSScriptRoot
 $fixture = Join-Path $env:RUNNER_TEMP 'voicestudio-wix-diagnostic'
 $artifacts = Join-Path $repo 'wix-diagnostic-artifacts'
 $target = 'x86_64-pc-windows-msvc'
+$lock = Get-Content "$repo/bun.lock" -Raw
+$cliMatch = [regex]::Match($lock, '"@tauri-apps/cli":\s*\["@tauri-apps/cli@([^"\s]+)"')
+if (-not $cliMatch.Success) { throw 'Cannot resolve the Tauri CLI version from bun.lock' }
+$cliPackage = '@tauri-apps/cli@' + $cliMatch.Groups[1].Value
 New-Item -ItemType Directory -Force -Path $fixture, $artifacts, "$fixture/src", "$fixture/resources/nested", "$fixture/binaries" | Out-Null
 @'
 [package]
@@ -56,7 +60,7 @@ try {
         $scopeConfig | ConvertTo-Json -Depth 20 | Set-Content -Encoding utf8 "$fixture/$scope.conf.json"
         $log = Join-Path $artifacts "$scope.log"
         $ErrorActionPreference = 'Continue'
-        & bun x --package '@tauri-apps/cli@2.11.4' tauri bundle -vv --target $target --bundles msi --config "$scope.conf.json" *> $log
+        & bun x --package $cliPackage tauri bundle -vv --target $target --bundles msi --config "$scope.conf.json" *> $log
         $results[$scope] = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
         Get-Content $log

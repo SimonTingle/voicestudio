@@ -452,8 +452,9 @@ jobs:
           HF_HUB_CACHE: ${{ runner.temp }}/worker-artifact-empty-hf-cache
 
   windows-wix-diagnostic:
-    name: Windows MSI authoring diagnostic (no publishing)
-    if: ${{ inputs.windows_wix_diagnostic }}
+    name: Windows MSI authoring (no publishing)
+    needs: test
+    if: ${{ !cancelled() && (inputs.windows_wix_diagnostic || needs.test.result == 'success') }}
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
