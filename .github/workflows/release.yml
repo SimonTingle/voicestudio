@@ -604,6 +604,21 @@ jobs:
             fi
           done < /tmp/stale.txt
 
+      # A retried job reuses its version and can collide with installers it
+      # uploaded before a later step failed. Keep other versions/arches intact;
+      # macOS versionless updater archives are scoped by release tag and arch.
+      - name: Clear this target's installer assets on retry
+        if: github.run_attempt > 1
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ (needs.preview-gate.outputs.is_preview == 'true') && 'preview' || github.ref_name }}
+          RELEASE_TARGET: ${{ matrix.rust_target }}
+        run: |
+          VERSION=$(python -c 'import json; print(json.load(open("frontend/package.json"))["version"])')
+          python scripts/clear-release-rerun-assets.py \
+            --tag "$RELEASE_TAG" --version "$VERSION" --target "$RELEASE_TARGET"
+
       - name: Build + release (Tauri)
         uses: tauri-apps/tauri-action@v0
         env:
