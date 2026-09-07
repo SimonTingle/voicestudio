@@ -31,8 +31,8 @@ $credential = New-Object System.Management.Automation.PSCredential("$env:COMPUTE
 $created = $false
 $changed = $false
 try {
-    & net user $user $password /add | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot create standard user' }
+    New-LocalUser -Name $user -Password $secure -AccountNeverExpires | Out-Null
+    Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $user
     $created = $true
     foreach ($mode in @('baseline','allow-unmanaged-host')) {
         if ($mode -eq 'allow-unmanaged-host') {
