@@ -11,6 +11,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      windows_wix_diagnostic:
+        description: Run only the tiny nonpublishing Windows MSI authoring diagnostic
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,6 +26,7 @@ env:
 
 jobs:
   test:
+    if: ${{ !inputs.windows_wix_diagnostic }}
     name: Tests (backend + frontend)
     runs-on: ubuntu-22.04
     env:
@@ -189,6 +195,7 @@ jobs:
   # and `cargo test --lib` runs the shell's unit tests natively on each OS.
   # Full bundling stays in release.yml on tag push.
   tauri-cross-platform:
+    if: ${{ !inputs.windows_wix_diagnostic }}
     name: Tauri shell check (${{ matrix.label }})
     needs: test
     strategy:
@@ -289,6 +296,7 @@ jobs:
   # job above misses. Narrow scope (tests/smoke/ only) — full pytest stays
   # on Linux until Phase 1's INST-01 lands setuptools for WhisperX.
   smoke-matrix:
+    if: ${{ !inputs.windows_wix_diagnostic }}
     name: Smoke (${{ matrix.label }})
     needs: test
     strategy:
@@ -442,3 +450,24 @@ jobs:
         env:
           HF_HUB_OFFLINE: "1"
           HF_HUB_CACHE: ${{ runner.temp }}/worker-artifact-empty-hf-cache
+
+  windows-wix-diagnostic:
+    name: Windows MSI authoring (no publishing)
+    needs: test
+    if: ${{ !cancelled() && (inputs.windows_wix_diagnostic || needs.test.result == 'success') }}
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+      - name: Bundle canonical system and per-user templates with a tiny payload
+        shell: pwsh
+        run: ./scripts/diagnose-windows-wix.ps1
+      - name: Preserve verbose linker output and rendered authoring
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-wix-diagnostic
+          path: wix-diagnostic-artifacts/
+          if-no-files-found: warn
+          retention-days: 3
