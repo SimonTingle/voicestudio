@@ -18,8 +18,6 @@ edition = "2021"
 'Root resource payload' | Set-Content -Encoding utf8 "$fixture/resources/readme.txt"
 Copy-Item "$repo/frontend/src-tauri/wix/main.wxs" "$fixture/system.wxs"
 Copy-Item "$repo/frontend/src-tauri/icons/icon.ico" "$fixture/icon.ico"
-& python "$repo/scripts/render-per-user-wix.py" --source "$fixture/system.wxs" --output "$fixture/per-user.wxs"
-if ($LASTEXITCODE -ne 0) { throw 'Per-user template rendering failed' }
 $config = @{
     productName = 'VoiceStudio MSI Diagnostic'
     version = '0.0.0'
@@ -46,6 +44,11 @@ try {
     Copy-Item "$fixture/target/$target/release/wix-diagnostic.exe" "$fixture/binaries/helper-$target.exe"
     $results = @{}
     foreach ($scope in @('system', 'per-user')) {
+        if ($scope -eq 'per-user') {
+            & python "$repo/scripts/render-per-user-wix.py" --source "$fixture/system.wxs" --system-wxs "$fixture/target/$target/release/wix/x64/main.wxs" --output "$fixture/per-user.wxs"
+            if ($LASTEXITCODE -ne 0) { throw 'Per-user template rendering failed' }
+            Remove-Item "$fixture/target/$target/release/wix", "$fixture/target/$target/release/bundle" -Recurse -Force -ErrorAction SilentlyContinue
+        }
         $scopeConfig = @{
             productName = "VoiceStudio MSI Diagnostic $scope"
             bundle = @{ windows = @{ wix = @{ template = "$scope.wxs" } } }
