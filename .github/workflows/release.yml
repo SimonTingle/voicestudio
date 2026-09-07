@@ -674,6 +674,7 @@ jobs:
           set -euo pipefail
           python ../scripts/render-per-user-wix.py \
             --source src-tauri/wix/main.wxs \
+            --system-wxs src-tauri/target/${{ matrix.rust_target }}/release/wix/x64/main.wxs \
             --output src-tauri/target/wix-per-user/main.wxs
           bunx tauri build --target ${{ matrix.rust_target }} --bundles msi \
             --config src-tauri/tauri.per-user.conf.json
