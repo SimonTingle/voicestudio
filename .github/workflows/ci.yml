@@ -428,8 +428,8 @@ jobs:
           PY
 
       - name: Run smoke tests
-        if: matrix.backend_supported
         # Exercise credential paths on native Windows as well as POSIX hosts.
+        if: matrix.backend_supported
         run: uv run --no-sync pytest tests/smoke/ tests/test_hf_token_cache_paths.py -q --tb=short
         env:
           HF_HUB_OFFLINE: "1"  # same no-silent-downloads guard as the main pytest job
