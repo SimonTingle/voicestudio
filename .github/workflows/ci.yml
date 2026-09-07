@@ -464,6 +464,9 @@ jobs:
       - name: Bundle canonical system and per-user templates with a tiny payload
         shell: pwsh
         run: ./scripts/diagnose-windows-wix.ps1
+      - name: Restore hosted Installer policy after failed standard-user installation
+        shell: powershell
+        run: ./scripts/test-msi-policy-cleanup.ps1
       - name: Preserve verbose linker output and rendered authoring
         if: always()
         uses: actions/upload-artifact@v4

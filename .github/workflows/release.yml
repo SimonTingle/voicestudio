@@ -795,7 +795,7 @@ jobs:
           set -euo pipefail
           MSI=$(find frontend/src-tauri/target/${{ matrix.rust_target }}/release/bundle/msi -name '*Current*User*.msi' | head -1)
           powershell.exe -NoProfile -ExecutionPolicy Bypass \
-            -File scripts/smoke-per-user-msi.ps1 -MsiPath "$(cygpath -w "$MSI")"
+            -File scripts/smoke-per-user-msi.ps1 -MsiPath "$(cygpath -w "$MSI")" -PrepareHostedRunner
 
       # linuxdeploy re-links .DirIcon as an ABSOLUTE symlink into the build
       # machine AFTER tauri's files-map has placed the real icon bytes — the
