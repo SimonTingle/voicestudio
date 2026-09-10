@@ -890,8 +890,8 @@ jobs:
 
       # ── Compute SHA-256 checksums (Phase 0 GATE-05) ───────────────────
       # Native OS tools: shasum -a 256 (POSIX) / Get-FileHash (Windows).
-      # Writes SHA256SUMS-<label>.txt for the user-verifiable path AND
-      # captures the content into $GITHUB_OUTPUT for body append.
+      # Writes SHA256SUMS-<label>.txt, attached to the release below. The
+      # release-notes-checksums job puts every leg's file into the notes.
       - name: Compute SHA-256 checksums
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         id: checksums
@@ -944,15 +944,74 @@ jobs:
 
           echo "checksums_file=$OUT" >> "$GITHUB_OUTPUT"
 
-      - name: Append checksums to release + attach SHA256SUMS file
+      # Attach only. The notes are one shared text and the publish is one
+      # decision, so both belong to the single release-notes-checksums job
+      # that runs after the whole matrix (see there for why).
+      - name: Attach SHA256SUMS file
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          append_body: true
-          body_path: ${{ steps.checksums.outputs.checksums_file }}
-          files: ${{ steps.checksums.outputs.checksums_file }}
-          fail_on_unmatched_files: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          FILE: ${{ steps.checksums.outputs.checksums_file }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" "$FILE" --clobber --repo "$GITHUB_REPOSITORY"
+
+  # ── Checksums into the notes, then publish (the single writer) ───────────
+  # Every build leg used to append its checksums to the shared release notes
+  # with softprops/action-gh-release. Two things went wrong:
+  #   - The appends were concurrent read-modify-writes, so a leg that read the
+  #     notes before another wrote them lost its section. v0.5.1 and v0.5.2
+  #     both shipped without the macOS Apple Silicon checksums in the notes.
+  #   - softprops defaults to draft: false, so the FIRST leg to finish
+  #     published tauri-action's draft while the other installers and the
+  #     complete latest.json were still being built (v0.5.2 went public at
+  #     17:27; its latest.json was finished at 17:38).
+  # This job is the only writer of the notes and the only publisher. It runs
+  # once every leg, the manifest repair and the uninstall scripts are done,
+  # writes the four platforms' checksums in a fixed order, and fails if one is
+  # missing, so a failed platform leaves the release a draft.
+  release-notes-checksums:
+    needs: [build, repair-updater-manifest, uninstall-scripts]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Write every platform's checksums into the notes, then publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK="$(mktemp -d)"
+          gh release download "$TAG" --repo "$REPO" --pattern 'SHA256SUMS-*.txt' --dir "$WORK"
+          # The checksum sections and the Contributors strip are always the
+          # tail of the notes; drop them so a re-run rebuilds rather than
+          # stacks (contributors-strip re-appends its strip after this job).
+          gh release view "$TAG" --repo "$REPO" --json body --jq .body \
+            | awk '/^### .* artifacts$/ || /^## Contributors$/ {exit} {print}' > "$WORK/notes.md"
+          missing=0
+          for label in "macOS Apple Silicon" "macOS Intel" "Windows x64" "Linux x64"; do
+            file="$WORK/SHA256SUMS-${label// /.}.txt"
+            if [ -f "$file" ]; then
+              cat "$file" >> "$WORK/notes.md"
+            else
+              echo "::error::The release has no checksums for $label"
+              missing=1
+            fi
+          done
+          [ "$missing" = 0 ] || exit 1
+          gh release edit "$TAG" --repo "$REPO" --notes-file "$WORK/notes.md"
+          if [[ "$TAG" == *-* ]]; then
+            gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease
+          else
+            gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          fi
 
   # ── Uninstall scripts as release assets (#1089) ───────────────────────────
   # The in-app uninstaller (Settings → Storage → Remove all data) is the primary
@@ -1049,11 +1108,12 @@ jobs:
   # MUST append via `gh release edit` on the EXISTING release (never a second
   # softprops publish — that races tauri-action's per-matrix draft and splits
   # installers across two releases; see uninstall-scripts). `needs: [build]`
-  # guarantees the release + all checksum appends already landed, and this job
+  # guarantees the release exists and release-notes-checksums has written the
+  # notes, and this job
   # is single (no matrix) so there is no write race. Idempotent: it strips any
   # prior "## Contributors" block before re-appending, so re-runs don't stack.
   contributors-strip:
-    needs: [build]
+    needs: [build, release-notes-checksums]
     if: >-
       github.event_name == 'push'
       && startsWith(github.ref, 'refs/tags/v')
