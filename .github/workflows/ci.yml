@@ -443,6 +443,20 @@ jobs:
           HF_HUB_OFFLINE: "1"  # same no-silent-downloads guard as the main pytest job
           HF_HUB_CACHE: ${{ runner.temp }}/pockettts-empty-hf-cache
 
+      # The isolated backend session, on Windows. The `test` job runs it on
+      # Linux only, which is how four tests that CANNOT pass on Windows shipped
+      # unnoticed: two reach for os.WNOHANG and os.waitid (POSIX-only, an
+      # AttributeError before the first assertion), one asserts a RuntimeError
+      # that `backend_drain_fd` returns None instead of raising off POSIX, and
+      # one raced the OS reaping a crashed child — a race Linux won and Windows
+      # lost every time. All four were invisible to CI and hit every Windows
+      # contributor on their first `pytest` run. Forty seconds closes the class.
+      - name: Isolated backend session (Windows)
+        if: runner.os == 'Windows' && matrix.backend_supported
+        run: uv run --no-sync pytest backend/tests/ -q --tb=short
+        env:
+          HF_HUB_OFFLINE: "1"
+
       # Artifact commits depend on native Windows rename/replace semantics;
       # Linux emulation cannot exercise sharing rules or path parsing.
       - name: Remote-worker artifact paths (Windows)
